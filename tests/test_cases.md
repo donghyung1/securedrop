@@ -1,6 +1,8 @@
 # SecureDrop Cloud 테스트 케이스 (B: 오탐·미탐·재검사 + 확장)
 
 기대 결과는 `backend/detector.py`의 규칙(정규식 + RRN 체크섬 + 카드 Luhn)을 읽고 계산한 값이다.
+**배포 환경 재검증(2026-10-19): D-01~D-15, F-01~F-11, L-01~L-04 총 30건을 `/api/scan` 배포 주소로 실행해 모두 기대 결과와 일치했다(L-05는 정의상 미탐이라 생략).**
+
 **실제 서버에서 한 번 실행해 "실제 결과" 열을 채운 뒤 발표 자료에 쓴다.** 번호는 모두 테스트용 가짜 값이다.
 
 실행 방법(서버 실행 후):
@@ -129,9 +131,9 @@ F-05, D-06처럼 **유효한 RRN이 Luhn까지 통과하면 CARD가 추가로 �
 | A-03 | 관리자 비밀번호 해시 | 매번 다른 솔트, `scrypt$131072$8$1$` 형식 | `test_scrypt_salts` | ☐ (`sd_admins` 항목 확인) |
 | A-04 | 없는 아이디 vs 틀린 비밀번호 | 같은 401 문구 | `test_admin_failures_and_lock` | ☐ |
 | A-05 | 5회 실패 | 15분 잠금 423 ACCOUNT_LOCKED | 위와 동일 | ☐ |
-| A-06 | 로그아웃 후 이전 토큰 | 401 | `test_admin_routes_privacy_stats_and_logout` | ☐ |
+| A-06 | 로그아웃 후 이전 토큰 | 401 | `test_admin_routes_privacy_stats_and_logout` | ✅ 2026-10-19 로그아웃 후 새로고침 시 로그인 화면 |
 | A-07 | 관리자 응답에 파일명·링크·토큰 포함 여부 | 없음 | 위와 동일 | ✅ 배포 admin.html 화면 확인 |
-| A-08 | 세션 없이 `/api/admin/*` | 401 (새 관리자 API도 기본 보호) | `test_every_admin_route_requires_session_by_default` | ☐ |
+| A-08 | 세션 없이 `/api/admin/*` | 401 (새 관리자 API도 기본 보호) | `test_every_admin_route_requires_session_by_default` | ✅ 가짜 토큰·무토큰 401 (curl) |
 | A-09 | 만료된 관리자 세션(TTL 삭제 전) | 401 | `test_admin_expiry_checked_without_ttl_delete` | ☐ |
 | A-10 | DynamoDB `sd_admin_sessions`·`sd_transfers`에 토큰 원문 | 없음(SHA-256 해시만) | 위 테스트 일부 | ☐ |
 
