@@ -107,4 +107,4 @@ uv run --with playwright python infra/verify_browser.py
 
 배포 상태와 검증 결과는 git에서 제외된 `deploy/aws/serverless.json`, `serverless-verification.json`, `browser-verification.json`에 저장합니다. 기존 CloudFront 설정은 `cloudfront-before-serverless.json`으로 보관합니다. 스크립트는 기존 EC2를 자동 종료하지 않습니다. 검증 완료 후 해당 instance ID를 확인해 종료하고 연결된 Elastic IP를 해제하세요.
 
-정적 데모는 별도 웹 S3 버킷과 CloudFront OAC로 제공합니다. `frontend/config.js`의 로컬 기본 API 주소는 배포 시 API Gateway 주소로 바뀝니다. 로컬 화면은 `python -m http.server 5500 --directory frontend`로 열 수 있습니다. TXT·CSV는 4MiB까지, 그 외 지원 형식은 위험 확인 후 20MiB까지 단일 파일을 전송합니다. 관리 토큰과 정제 바이트는 현재 탭 메모리에만 보관하므로 탭을 닫으면 폐기 권한을 잃으며 링크는 정해진 시각에 만료됩니다.
+웹 화면은 저장소 루트의 `frontend/`에서 JS·CSS 하위 폴더까지 웹 S3 버킷에 업로드하고 CloudFront OAC로 제공합니다. `backend/frontend/`는 이전 테스트 콘솔이며, 이 폴더에서는 `admin.html·js·css`만 함께 배포합니다. 루트 `frontend/config.js`는 배포 시 `window.SD_CONFIG`에 API Gateway 주소와 `defaultApiMode: real`을 설정합니다. 로컬에서는 기존 mock 기본값을 유지합니다. 백엔드 폴더에서 로컬 화면은 `python -m http.server 5500 --directory ../frontend`로 열 수 있습니다. TXT·CSV는 4MiB까지, 그 외 지원 형식은 위험 확인 후 20MiB까지 단일 파일을 전송합니다. 새 웹 화면의 정제·미리보기 연결은 현재 미구현입니다. `verify_serverless.py`는 배포 파일과 로컬 소스가 같은지 확인하며 `verify_browser.py`는 실제 검사·전송·다운로드·폐기와 모바일 화면을 검증합니다.

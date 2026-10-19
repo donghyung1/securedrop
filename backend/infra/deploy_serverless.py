@@ -498,26 +498,38 @@ def deploy_frontend(s3, cf, account, files, web, distribution, api_base):
             }
         ),
     )
-    for path in (ROOT / "frontend").iterdir():
-        if path.is_file():
-            content = (
-                path.read_bytes()
-                if path.name != "config.js"
-                else f"window.SECUREDROP_API_BASE = {json.dumps(api_base)};\n".encode()
-            )
-            content_type = {
-                ".js": "application/javascript",
-                ".css": "text/css",
-                ".html": "text/html",
-            }.get(path.suffix, mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-            s3.put_object(
-                Bucket=web,
-                Key=path.name,
-                Body=content,
-                ContentType=content_type + "; charset=utf-8",
-                CacheControl="no-cache",
-                ServerSideEncryption="AES256",
-            )
+    frontend = ROOT.parent / "frontend"
+    assets = [
+        (path, path.relative_to(frontend).as_posix())
+        for path in frontend.rglob("*")
+        if path.is_file() and path.suffix in {".html", ".js", ".css"}
+    ]
+    assets.extend(
+        (ROOT / "frontend" / name, name) for name in ("admin.html", "admin.js", "admin.css")
+    )
+    for path, key in assets:
+        content = (
+            path.read_bytes()
+            if path.name != "config.js"
+            else (
+                "window.SD_CONFIG = "
+                + json.dumps({"apiBase": api_base, "defaultApiMode": "real", "cloudwatchUrl": ""})
+                + ";\n"
+            ).encode()
+        )
+        content_type = {
+            ".js": "application/javascript",
+            ".css": "text/css",
+            ".html": "text/html",
+        }.get(path.suffix, mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        s3.put_object(
+            Bucket=web,
+            Key=key,
+            Body=content,
+            ContentType=content_type + "; charset=utf-8",
+            CacheControl="no-cache",
+            ServerSideEncryption="AES256",
+        )
     csp = f"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' {api_base.rsplit('/prod', 1)[0]} https://{files}.s3.{REGION}.amazonaws.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://{files}.s3.{REGION}.amazonaws.com"
     security = {
         "StrictTransportSecurity": {

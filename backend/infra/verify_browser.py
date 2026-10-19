@@ -1,4 +1,4 @@
-"""Run the deployed demo in Chromium. Requires uv run --with playwright."""
+"""Verify the deployed frontend against the real API and signed S3 uploads."""
 
 import json
 from pathlib import Path
@@ -18,63 +18,56 @@ def main():
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(STATE["url"])
-        expect(page.locator("#health")).to_contain_text("서버 연결됨", timeout=60000)
-        page.locator("#sample").click()
-        page.locator("#scan").click()
-        expect(page.locator("#scan-result")).to_contain_text("민감정보 발견", timeout=60000)
-        results["text_scan"] = "passed"
+        expect(page).to_have_title("SecureDrop Cloud")
+        expect(page.locator("#api-mode")).to_contain_text(STATE["api_base"].split("://")[1])
+        assert page.evaluate("window.SD_CONFIG.defaultApiMode") == "real"
+        results["new_frontend_and_real_api_default"] = "passed"
         cases = [
             ("clean.txt", "text/plain", b"SecureDrop browser verification\n", "clean"),
-            ("sensitive.txt", "text/plain", b"Contact: 010-1234-5678\n", "sanitize"),
             ("risk.txt", "text/plain", b"Contact: 010-1234-5678\n", "risk"),
             ("large.json", "application/json", b" " * (20 * 1024 * 1024), "unsupported"),
         ]
         for name, mime, content, mode in cases:
-            page.locator("#file").set_input_files(
+            page.locator("#file-input").set_input_files(
                 {"name": name, "mimeType": mime, "buffer": content}
             )
             if mode == "clean":
-                expect(page.locator("#upload")).to_be_enabled(timeout=60000)
-                page.locator("#upload").click()
-                expected = content
-            elif mode == "sanitize":
-                expect(page.locator("#mask")).to_be_visible(timeout=60000)
-                page.locator("#mask").click()
-                expect(page.locator("#draft")).to_be_visible(timeout=60000)
-                expect(page.locator("#send-draft")).to_be_disabled()
-                page.locator("#approve").check()
-                expected = page.evaluate(
-                    "async () => Array.from(new Uint8Array(await draftFile.arrayBuffer()))"
+                expect(page.locator("#scan-status")).to_contain_text(
+                    "민감정보가 발견되지 않았습니다", timeout=60000
                 )
-                expected = bytes(expected)
-                assert expected != content and b"010-1234-5678" not in expected
-                page.locator("#send-draft").click()
             else:
-                expect(page.locator("#sensitive")).to_be_visible(timeout=60000)
-                expect(page.locator("#original")).to_be_disabled()
-                page.locator("#risk").check()
-                page.locator("#original").click()
-                expected = content
+                expect(page.locator("#confirm-row")).to_be_visible(timeout=60000)
+                expect(page.locator("#btn-send")).to_be_disabled()
+                if mode == "risk":
+                    expect(page.locator("#scan-status")).to_contain_text("원본 전송을 보류")
+                page.locator("#confirm-check").check()
+            expect(page.locator("#btn-send")).to_be_enabled(timeout=60000)
+            with page.expect_response(
+                lambda response: (
+                    response.url.endswith("/complete") and response.request.method == "POST"
+                ),
+                timeout=120000,
+            ) as completion:
+                page.locator("#btn-send").click()
+            done = completion.value.json()
+            expect(page.locator("#qr-card")).to_be_visible(timeout=60000)
+            assert done["share_url"].startswith(STATE["url"] + "/d.html?id=")
             try:
-                expect(page.locator("#status")).to_contain_text("전송 완료", timeout=120000)
-                share = page.locator("#download").get_attribute("href")
-                assert share.startswith(STATE["url"] + "/d.html?id=")
                 receiver = context.new_page()
-                receiver.goto(share)
-                expect(receiver.locator("#files a")).to_have_count(1, timeout=60000)
+                receiver.on("pageerror", lambda error: errors.append(str(error)))
+                receiver.goto(done["share_url"])
+                expect(receiver.locator("#dl-files button")).to_have_count(1, timeout=60000)
                 with receiver.expect_download(timeout=60000) as event:
-                    receiver.locator("#files a").click()
+                    receiver.locator("#dl-files button").click()
                 downloaded = event.value
-                assert Path(downloaded.path()).read_bytes() == expected
+                assert Path(downloaded.path()).read_bytes() == content
                 assert downloaded.suggested_filename == name
                 receiver.close()
                 results[mode + "_upload_and_download"] = "passed"
             finally:
-                if page.locator("#revoke").is_visible():
-                    page.locator("#revoke").click()
-                    expect(page.locator("#transfer-status")).to_contain_text(
-                        "폐기되었습니다", timeout=60000
-                    )
+                page.locator("#btn-revoke").click()
+                expect(page.locator("#qr-status")).to_contain_text("폐기됨", timeout=60000)
+            page.locator("#btn-new").click()
         page.set_viewport_size({"width": 390, "height": 844})
         page.screenshot(path=str(OUT / "demo-mobile.png"), full_page=True)
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

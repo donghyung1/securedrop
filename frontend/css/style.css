@@ -39,7 +39,8 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .topbar-sub { flex: 1; color: var(--muted); font-size: 0.9rem; }
 .badge {
   font-size: 0.75rem; padding: 3px 8px; border-radius: 999px;
-  background: var(--ok-bg); color: var(--ok); white-space: nowrap;
+  background: var(--ok-bg); color: var(--ok); max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .badge-mock { background: var(--warn-bg); color: var(--warn); }
 
@@ -166,7 +167,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
   .layout { grid-template-columns: 1fr; }
   .col-side { position: static; }
   .steps li { font-size: 0.72rem; }
-  .topbar { gap: 12px; padding: 12px 16px; }
+  .topbar { gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
   .topbar-sub { display: none; }
   .topbar .brand { flex: 1; }
 }

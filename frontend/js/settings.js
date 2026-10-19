@@ -12,7 +12,7 @@ try { savedMode = localStorage.getItem("sd.api"); } catch { /* 저장소 차단 
 
 export const CONFIG = {
   API_BASE: String(window.SD_CONFIG?.apiBase || "http://localhost:8000").replace(/\/+$/, ""),
-  USE_MOCK: (apiParam || savedMode || "mock") === "mock",
+  USE_MOCK: (apiParam || savedMode || window.SD_CONFIG?.defaultApiMode || "mock") === "mock",
 
   MAX_FILE_MB: 20,        // 전송 상한 (S3 Presigned POST content-length-range)
   SCAN_FILE_MAX_MB: 4,    // 검사·정제 상한 (Lambda 페이로드 한도)

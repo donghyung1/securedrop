@@ -128,13 +128,35 @@ def main():
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == STATE["url"]
         results["cors_preflight"] = "passed"
-    for asset in ("/", "/d.html", "/app.js", "/download.js", "/config.js", "/style.css"):
+    for asset in (
+        "/",
+        "/d.html",
+        "/js/main.js",
+        "/js/download.js",
+        "/config.js",
+        "/css/style.css",
+        "/admin.html",
+    ):
         response = httpx.get(STATE["url"] + asset, timeout=60)
         assert response.status_code == 200, (asset, response.status_code)
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["x-frame-options"] == "DENY"
         assert STATE["api_base"].split("/prod")[0] in response.headers["content-security-policy"]
     results["cloudfront_assets_and_security_headers"] = "passed"
+    frontend = OUT.parents[2] / "frontend"
+    assert (frontend / "index.html").is_file(), "Frontend source directory not found"
+    for path in frontend.rglob("*"):
+        if not path.is_file() or path.suffix not in {".html", ".js", ".css"}:
+            continue
+        asset = path.relative_to(frontend).as_posix()
+        response = httpx.get(STATE["url"] + "/" + asset, timeout=60)
+        assert response.status_code == 200, asset
+        if asset == "config.js":
+            assert STATE["api_base"] in response.text
+            assert '"defaultApiMode": "real"' in response.text
+        else:
+            assert response.content == path.read_bytes(), (asset, "Deployed asset mismatch")
+    results["frontend_matches_local_source"] = "passed"
     (OUT / "serverless-verification.json").write_text(
         json.dumps(results, indent=2) + "\n", encoding="utf-8"
     )
