@@ -92,6 +92,20 @@ def test_scan_validation_privacy_and_health(env):
     assert client.get("/api/logs", headers=ORIGIN).json() == {"items": []}
 
 
+def test_frontend_serves_assets_without_exposing_backend_files(env):
+    client, _, _ = env
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'lang="ko"' in response.text
+    assert "/static/app.js" in response.text
+    assert response.headers["cache-control"] == "no-store"
+    for asset in ("app.js", "style.css"):
+        assert client.get(f"/static/{asset}").status_code == 200
+    assert client.get("/static/.env").status_code == 404
+    assert client.get("/static/../config.py").status_code == 404
+    assert client.post("/api/scan", json={"text": "hello"}).status_code == 401
+
+
 def test_transfer_s3_qr_and_revoke(env):
     client, app, s3 = env
     response = upload(client, data={"expires_in": "300"})

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SecureDrop · 테스트 콘솔</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">SECUREDROP CLOUD / DEMO</p><h1>확인하고, 안전하게 공유하세요.</h1>
+      <p>민감정보 검사부터 정제, 만료되는 다운로드 링크까지.</p></div><span id="health" class="badge">서버 확인 중</span></header>
+    <p class="notice">테스트용 콘솔입니다. 전송 시 실제 S3에 업로드됩니다. PDF·이미지는 내용 검사를 지원하지 않습니다.</p>
+    <div class="grid">
+      <section><p class="eyebrow">01 / TEXT CHECK</p><h2>텍스트 검사</h2>
+        <label for="text">검사할 텍스트</label><textarea id="text" rows="7" maxlength="50000" placeholder="검사할 내용을 입력하세요"></textarea>
+        <div class="actions"><button id="scan" type="button">민감정보 검사</button><button id="sample" class="secondary" type="button">샘플 입력</button></div>
+        <p id="scan-result" role="status">주민등록번호 · 전화번호 · 이메일 · 키 · 카드번호 탐지</p>
+      </section>
+      <section><p class="eyebrow">02 / FILE TRANSFER</p><h2>파일 공유</h2>
+        <label for="file">전송할 파일 (최대 20 MiB)</label><input id="file" type="file" accept=".txt,.csv,.json,.md,.log,.xml,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.gif,.webp">
+        <label for="expiry">링크 유효 시간</label><select id="expiry"><option value="300">5분</option><option value="600" selected>10분</option><option value="3600">1시간</option></select>
+        <button id="upload" type="button" disabled>검사 후 링크 만들기</button>
+        <p>TXT·CSV는 민감정보 탐지 시 마스킹 또는 삭제할 수 있습니다.</p>
+        <div id="sensitive" hidden>
+          <p id="findings" class="warning"></p>
+          <div id="sanitize-actions" class="actions"><button id="mask" type="button">모두 마스킹</button><button id="remove" class="secondary" type="button">탐지 값 모두 삭제</button></div>
+          <label class="check"><input id="risk" type="checkbox"> 민감정보가 포함된 파일을 공유할 위험을 이해했습니다.</label>
+          <button id="original" class="danger" type="button" disabled>위험 확인 후 현재 파일 전송</button>
+        </div>
+        <div id="draft" hidden><h3>처리본 미리보기</h3><p id="draft-result"></p><pre id="preview"></pre>
+          <label class="check"><input id="approve" type="checkbox"> 미리보기를 확인했고 처리본 전송에 동의합니다.</label>
+          <div class="actions"><button id="send-draft" type="button" disabled>처리본 링크 만들기</button><button id="cancel" class="secondary" type="button">처리본 폐기</button></div>
+        </div>
+      </section>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section id="transfer" hidden><p class="eyebrow">03 / READY TO SHARE</p><h2>다운로드 링크가 준비되었습니다.</h2>
+      <div class="share"><img id="qr" alt="다운로드 링크 QR 코드" width="180" height="180"><div><p id="expires"></p>
+        <a id="download" target="_blank" rel="noopener noreferrer">다운로드 열기</a>
+        <div class="actions"><button id="copy" type="button">링크 복사</button><button id="revoke" class="danger" type="button">전송 폐기</button></div><p id="transfer-status" role="status"></p></div></div>
+    </section>
+    <details><summary>연결 설정</summary><label for="api-key">API Key (선택, 현재 탭의 메모리에만 보관)</label><input id="api-key" type="password" autocomplete="off" placeholder="허용된 Origin에서는 입력하지 않아도 됩니다">
+      <p>인증 오류가 나면 서버의 ALLOWED_ORIGINS에 현재 주소의 Origin을 추가하거나 테스트 API Key를 입력하세요. 키 사용 시 분당 30회 제한이 적용됩니다.</p></details>
+    <footer>SecureDrop 테스트 콘솔 · <a href="/docs">API 문서</a> · 입력 내용은 브라우저 저장소에 저장하지 않습니다.</footer>
+  </main>
+</body>
+</html>

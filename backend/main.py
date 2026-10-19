@@ -5,7 +5,7 @@ import json
 import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -13,8 +13,9 @@ from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
@@ -206,6 +207,13 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
     app.state.storage = storage
     app.state.settings = settings
     app.state.drafts = drafts
+    frontend = Path(__file__).resolve().parent / "frontend"
+    app.mount("/static", StaticFiles(directory=frontend), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def frontend_index():
+        return FileResponse(frontend / "index.html")
+
     key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
     def authenticate(request: Request, api_key: Annotated[str | None, Depends(key_header)]):
