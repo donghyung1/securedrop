@@ -500,6 +500,10 @@ def deploy_frontend(s3, cf, account, files, web, distribution, api_base):
             }
         ),
     )
+    cloudwatch_url = (
+        f"https://{REGION}.console.aws.amazon.com/cloudwatch/home"
+        f"?region={REGION}#dashboards/dashboard/SecureDrop-Demo"
+    )
     frontend = ROOT.parent / "frontend"
     assets = [
         (path, path.relative_to(frontend).as_posix())
@@ -516,7 +520,7 @@ def deploy_frontend(s3, cf, account, files, web, distribution, api_base):
             else (
                 "window.SD_CONFIG = "
                 + json.dumps({
-                    "apiBase": api_base, "adminApiBase": "", "defaultApiMode": "real", "cloudwatchUrl": ""
+                    "apiBase": api_base, "adminApiBase": "", "defaultApiMode": "real", "cloudwatchUrl": cloudwatch_url
                 })
                 + ";\n"
             ).encode()

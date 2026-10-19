@@ -1,0 +1,493 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "securedrop-api",
+    "version": "2026-10-19T06:49:25Z"
+  },
+  "servers": [
+    {
+      "url": "https://<REST_API_ID>.execute-api.ap-northeast-2.amazonaws.com/{basePath}",
+      "variables": {
+        "basePath": {
+          "default": "prod"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/d/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/scan": {
+      "post": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/plugin/{proxy+}": {
+      "options": {
+        "parameters": [
+          {
+            "name": "proxy",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "parameters": [
+          {
+            "name": "proxy",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/ext/logs": {
+      "post": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/plugin/openapi.json": {
+      "get": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/{proxy+}": {
+      "options": {
+        "parameters": [
+          {
+            "name": "proxy",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "parameters": [
+          {
+            "name": "proxy",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/api/admin/login": {
+      "post": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "options": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      },
+      "x-amazon-apigateway-any-method": {
+        "x-amazon-apigateway-integration": {
+          "type": "aws_proxy",
+          "uri": "arn:aws:apigateway:ap-northeast-2:lambda:path/2015-03-31/functions/arn:aws:lambda:ap-northeast-2:<ACCOUNT_ID>:function:securedrop-api/invocations",
+          "httpMethod": "POST",
+          "passthroughBehavior": "when_no_match",
+          "timeoutInMillis": 29000,
+          "responseTransferMode": "BUFFERED"
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "api_key": {
+        "type": "apiKey",
+        "name": "x-api-key",
+        "in": "header"
+      }
+    }
+  },
+  "x-amazon-apigateway-security-policy": "TLS_1_0",
+  "x-amazon-apigateway-gateway-responses": {
+    "THROTTLED": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"RATE_LIMITED\", \"message\": \"Too many requests\"}}"
+      }
+    },
+    "UNAUTHORIZED": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"UNAUTHORIZED\", \"message\": \"Authentication required\"}}"
+      }
+    },
+    "DEFAULT_4XX": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"VALIDATION_ERROR\", \"message\": \"Request rejected\"}}"
+      }
+    },
+    "INVALID_API_KEY": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"UNAUTHORIZED\", \"message\": \"API key required\"}}"
+      }
+    },
+    "QUOTA_EXCEEDED": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"RATE_LIMITED\", \"message\": \"Quota exceeded\"}}"
+      }
+    },
+    "DEFAULT_5XX": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"STORAGE_ERROR\", \"message\": \"Service unavailable\"}}"
+      }
+    },
+    "ACCESS_DENIED": {
+      "responseParameters": {
+        "gatewayresponse.header.Vary": "'Origin'",
+        "gatewayresponse.header.Cache-Control": "'no-store'",
+        "gatewayresponse.header.Access-Control-Allow-Methods": "'GET,POST,DELETE,OPTIONS'",
+        "gatewayresponse.header.Access-Control-Allow-Origin": "method.input.params.Origin",
+        "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'"
+      },
+      "responseTemplates": {
+        "application/json": "{\"error\": {\"code\": \"FORBIDDEN\", \"message\": \"Access denied\"}}"
+      }
+    }
+  },
+  "x-amazon-apigateway-binary-media-types": [
+    "multipart/form-data"
+  ]
+}

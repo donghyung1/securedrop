@@ -35,7 +35,7 @@ sd_transfers에는 `day-created-index` GSI(created_day HASH, created_at RANGE, A
 - CORS origin은 CloudFront와 개발용 localhost만 허용합니다. Methods GET/POST, AllowedHeaders `*`, ExposeHeaders ETag, MaxAgeSeconds 3000.
 - Lambda 실행 역할에 이 버킷의 `transfers/*`에 대한 s3:PutObject/GetObject/DeleteObject만 부여합니다. HeadObject는 GetObject 권한을 사용합니다.
 
-웹 버킷은 CloudFront OAC를 통해서만 읽도록 제한합니다. HTTPS redirect, HSTS, nosniff, DENY frame 정책, CSP를 적용하고 connect-src에는 API Gateway와 전송 S3 주소를 허용합니다. API를 CloudFront로 프록시하지 않습니다. `PUBLIC_BASE_URL`은 이 CloudFront origin입니다. `../frontend/`의 `d.html` 수신 페이지와 데모 화면은 새 API 계약을 사용하며 자동 배포 시 이 웹 버킷에 업로드합니다.
+웹 버킷은 CloudFront OAC를 통해서만 읽도록 제한합니다. HTTPS redirect, HSTS, nosniff, DENY frame 정책, CSP를 적용하고 connect-src에는 API Gateway와 전송 S3 주소를 허용합니다. API는 CloudFront로 프록시하지 않지만 관리자 API(`/api/admin/*`)는 예외입니다. 배포 환경에서 콘솔의 교차 출처 관리자 호출 인증이 실패해 같은 도메인으로 전달하도록 바꿨습니다(`admin_origin.py`, 커밋 b692ff8). 이 경로는 캐시를 끄고 `Authorization`과 쿼리만 API Gateway `/prod`로 전달합니다. PRD 8.1과 다른 점이므로 발표 자료에 명시합니다. `PUBLIC_BASE_URL`은 이 CloudFront origin입니다. `../frontend/`의 `d.html` 수신 페이지와 데모 화면은 새 API 계약을 사용하며 자동 배포 시 이 웹 버킷에 업로드합니다.
 
 ## 3. Lambda 패키지
 
@@ -77,7 +77,9 @@ DEFAULT_4XX/DEFAULT_5XX 및 UNAUTHORIZED(401), ACCESS_DENIED/INVALID_API_KEY(403
 uv run python infra/configure_monitoring.py --profile lab --api-id YOUR_REST_API_ID
 ```
 
-Lambda·게이트웨이 로그 그룹을 14일 보존하고 `SecureDrop-Demo` 대시보드와 Lambda Errors/API 5XX 알람 2개를 설정합니다. 알림 action은 없으며 SNS·SES를 만들지 않습니다. 앱은 request_id·경로 템플릿·상태·지연을 JSON 로그로, 차단 건수(유형/출처별)와 전송 수를 `SecureDrop` namespace의 EMF 지표로 기록합니다. 관리자 화면에서는 AWS 콘솔 로그인 후 이 대시보드로 연결하면 됩니다.
+Lambda·게이트웨이 로그 그룹을 14일 보존하고 `SecureDrop-Demo` 대시보드와 Lambda Errors/API 5XX 알람 2개를 설정합니다. 알림 action은 없으며 SNS·SES를 만들지 않습니다. 앱은 request_id·경로 템플릿·상태·지연을 JSON 로그로, 차단 건수(유형/출처별)와 전송 수를 `SecureDrop` namespace의 EMF 지표로 기록합니다. 배포 스크립트는 `config.js`의 `cloudwatchUrl`에 이 대시보드 주소를 넣으므로 관리자 콘솔에 링크가 표시됩니다. 링크를 열려면 AWS 콘솔에 로그인해야 합니다.
+
+배포된 REST API 정의는 `apigw-export.json`(OAS 3.0, API Gateway 확장 포함)에 보관합니다. 계정 ID와 REST API ID는 `<ACCOUNT_ID>`, `<REST_API_ID>`로 바꿨고 API Key 값은 내보내기에 포함되지 않습니다. 재생성은 `aws apigateway get-export --parameters extensions=apigateway --export-type oas30`으로 하며 같은 치환을 적용합니다.
 
 ## 6. 배포 검증
 
@@ -85,6 +87,19 @@ Lambda·게이트웨이 로그 그룹을 14일 보존하고 `SecureDrop-Demo` �
 
 관리 토큰 없이/다른 토큰으로 조회·완료·폐기는 403이어야 합니다. 객체가 없거나 크기가 다르면 완료 409, 해시 불일치는 삭제 후 409, 폐기·만료 링크는 각각 404/410이어야 합니다. 검사 세션 만료, 정제 잔여 민감정보 확인, 미지원 형식 확인도 검증합니다. API Key 없는 플러그인 호출 거절과 사용량 계획, 관리자 5회 실패 잠금·로그아웃·파일명 비노출을 확인합니다. 파일 원문·토큰이 로그에 없는지도 확인합니다.
 
-4MiB 검사 2초, 1MiB CSV 정제 3초, 20MiB 직접 전송 10초, 콜드 스타트 3초 목표는 실제 AWS에서 측정해야 합니다. 로컬 모의 테스트로 이 성능이나 브라우저의 실제 S3 서명 정책 적용을 보증하지 않습니다.
+4MiB 검사 2초, 1MiB CSV 정제 3초, 20MiB 직접 전송 10초, 콜드 스타트 3초 목표는 실제 AWS에서 측정해야 합니다. 로컬 모의 테스트로 이 성능이나 브라우저의 실제 S3 서명 정책 적용을 보증하지 않습니다. `uv run python infra/measure_performance.py`는 이 목표와 4MiB·20MiB 초과 거부, S3 POST 선언 크기 초과 거부를 측정합니다. 함수를 15분 이상 쉬게 한 뒤 실행해야 첫 호출이 콜드 스타트가 됩니다. 시간은 호출자 네트워크를 포함하므로 Lambda 로그의 `latency_ms`·REPORT와 함께 판단합니다. 결과는 `../deploy/aws/performance-verification.json`에 저장되며 측정에 쓴 전송은 폐기합니다.
 
-데모 종료 후 Project 태그로 신규 리소스를 확인해 API 사용량 계획/키, 게이트웨이, Lambda, CloudFront/OAC, S3 버킷 2개, DynamoDB 테이블 5개, 로그·대시보드·알람, IAM 역할을 정리합니다. 기존 EC2 리소스는 이 런북에서 변경하지 않습니다.
+## 7. 태그와 정리
+
+`uv run python infra/tag_resources.py --owner <담당자> --execute`는 S3·DynamoDB·Lambda·API Gateway(REST API·stage·사용량 계획·키)·로그 그룹·IAM 역할·알람·CloudFront에 `Project=securedrop`, `Owner`를 붙입니다. 기존 태그는 유지되며 대시보드는 태그를 지원하지 않습니다. `--execute`를 빼면 계획만 출력합니다.
+
+`infra/teardown.py`는 기본적으로 계획만 출력합니다. 삭제 전에 `Project=securedrop` 태그 또는 `../deploy/aws/serverless.json`의 ID와 일치하는지 확인하고, 맞지 않는 리소스는 건너뜁니다.
+
+```powershell
+uv run python infra/teardown.py                                                  # 계획 확인
+uv run python infra/teardown.py --api-key-only --execute --confirm <계정 ID>     # 발표 직후: 플러그인 API Key 삭제
+uv run python infra/teardown.py --execute --confirm <계정 ID>                    # 전체 정리(CloudFront 유지)
+uv run python infra/teardown.py --execute --confirm <계정 ID> --include-cloudfront
+```
+
+전체 정리 대상은 API Key, 사용량 계획, REST API, Lambda, S3 버킷 2개(객체 포함), DynamoDB 테이블 5개, 로그 그룹 2개, 알람 2개, 대시보드, Lambda 역할입니다. CloudFront 배포는 기존 도메인을 쓰므로 `--include-cloudfront`를 줄 때만 비활성화 후 삭제합니다(약 15분 소요). OAC와 응답 헤더 정책도 이때 함께 삭제합니다. `securedrop-apigateway-logs` 역할은 계정 전체의 API Gateway 로그 역할로 등록되어 있으면 건너뜁니다. Route 53 레코드, ACM 인증서, EC2 시절의 `securedrop-cloud-backend` 역할과 `securedrop-cloud-<계정>-<리전>` 버킷은 수동으로 정리합니다.

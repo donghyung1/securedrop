@@ -49,9 +49,9 @@ AWS 자격 증명 없이 공개 주소로 확인할 수 있는 항목만 점검�
 | CORS | ✅ | 허용되지 않은 Origin에는 `Access-Control-Allow-Origin`을 붙이지 않음 |
 | 오류 응답 | ✅ | 입력 오류가 값 원문을 되돌려주지 않음, 로그인 실패 문구 동일 |
 | 저장소 비밀값 | ✅ | 추적 파일·git 이력에 실제 키·토큰 없음. `AKIAIOSFODNN7EXAMPLE`은 AWS 공식 예시 값(샘플 파일). `.env`·`aws/` 산출물 미추적 |
-| 로그·DynamoDB에 원문 없음 | ☐ 미확인 | AWS 접근 필요: 로그 그룹에서 전화번호·`AKIA`·`sk-` 검색, `sd_events`·`sd_transfers` 항목 확인 |
-| `sd_admins`는 scrypt 해시, 토큰은 SHA-256만 | ☐ 미확인 | AWS 접근 필요(자동 테스트는 통과) |
-| 두 버킷 Block Public Access 4개 설정 | ☐ 미확인 | 외부에서는 403으로만 확인, 콘솔에서 설정값 확인 필요 |
+| 로그·DynamoDB에 원문 없음 | ✅ (A 확인 2026-10-20) | 로그 3,573건과 DynamoDB 전 항목 패턴 검사 결과 오탐뿐. [A_ROLE.md](A_ROLE.md) 참고 |
+| `sd_admins`는 scrypt 해시, 토큰은 SHA-256만 | ✅ (A 확인 2026-10-20) | `scrypt$131072$8$1$…`, `manage_hash`는 hex64. 관리자 세션은 점검 시 0건이라 코드·테스트로 확인 |
+| 두 버킷 Block Public Access 4개 설정 | ✅ (A 확인 2026-10-20) | 두 버킷 모두 4개 true, `IsPublic=false` |
 
 ### 남은 점검
 - [ ] 위 "미확인" 3건 (AWS 콘솔 또는 개발자 프로필로)
