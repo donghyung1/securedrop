@@ -18,12 +18,15 @@
   </head>
   <body>
     <h1>SecureDrop Guard</h1>
-    <label for="serverUrl">서버 주소</label>
-    <input id="serverUrl" type="text" spellcheck="false" />
+    <label for="apiBase">API 주소 (API Gateway, /prod 포함)</label>
+    <input id="apiBase" type="text" spellcheck="false" />
+    <label for="webBase">웹 주소 (CloudFront)</label>
+    <input id="webBase" type="text" spellcheck="false" />
     <label class="check"><input id="failClosed" type="checkbox" />서버 무응답 시 전송 차단 (fail-closed)</label>
     <small>끄면 서버에 연결할 수 없을 때 검사 없이 전송됩니다.</small>
     <button id="save">저장 후 연결 확인</button>
     <div id="status" role="status"></div>
+    <script src="config.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

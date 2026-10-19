@@ -117,3 +117,35 @@ F-05, D-06처럼 **유효한 RRN이 Luhn까지 통과하면 CARD가 추가로 �
   - **F-03** `901301-1234568`(13월이라 RRN은 아님)이 **CARD로 차단**됨. 13자리 숫자열이 우연히 Luhn 검사를 통과한다. 13~19자리 숫자열은 날짜·체크섬이 틀려도 약 10% 확률로 CARD로 잡히는 구조다.
   - **F-05**: 유효 RRN이 RRN과 CARD로 중복 집계됨.
 - 개선 제안(A에게 전달): 카드번호 길이를 13자리 제외(주요 카드는 15~16자리), 또는 RRN 형식(`\d{6}-?[1-4]\d{6}`)과 겹치는 13자리는 CARD에서 제외.
+
+## 4. 관리 토큰·관리자 인증 (PRD 10.6 필수 항목)
+
+자동 테스트는 `backend/tests/test_backend.py`가 담당한다(moto 사용, AWS 호출 없음). 배포 후에는 아래를 실제 주소에서 한 번씩 손으로 확인한다.
+
+| ID | 시나리오 | 기대 결과 | 자동 테스트 | 배포 확인 |
+|---|---|---|---|---|
+| A-01 | 관리 토큰 없이 전송 조회·완료·폐기 | 403 FORBIDDEN | `test_presigned_post_policy_and_manage_token` | ☐ |
+| A-02 | 다른 전송의 관리 토큰으로 폐기 | 403 FORBIDDEN | 위와 동일 | ☐ |
+| A-03 | 관리자 비밀번호 해시 | 매번 다른 솔트, `scrypt$131072$8$1$` 형식 | `test_scrypt_salts` | ☐ (`sd_admins` 항목 확인) |
+| A-04 | 없는 아이디 vs 틀린 비밀번호 | 같은 401 문구 | `test_admin_failures_and_lock` | ☐ |
+| A-05 | 5회 실패 | 15분 잠금 423 ACCOUNT_LOCKED | 위와 동일 | ☐ |
+| A-06 | 로그아웃 후 이전 토큰 | 401 | `test_admin_routes_privacy_stats_and_logout` | ☐ |
+| A-07 | 관리자 응답에 파일명·링크·토큰 포함 여부 | 없음 | 위와 동일 | ☐ (admin.html 화면 확인) |
+| A-08 | 세션 없이 `/api/admin/*` | 401 (새 관리자 API도 기본 보호) | `test_every_admin_route_requires_session_by_default` | ☐ |
+| A-09 | 만료된 관리자 세션(TTL 삭제 전) | 401 | `test_admin_expiry_checked_without_ttl_delete` | ☐ |
+| A-10 | DynamoDB `sd_admin_sessions`·`sd_transfers`에 토큰 원문 | 없음(SHA-256 해시만) | 위 테스트 일부 | ☐ |
+
+## 5. 확장프로그램 시연 체크리스트 (Day 4~5)
+
+| ID | 시나리오 | 기대 결과 | 결과 |
+|---|---|---|---|
+| E-01 | 대상 사이트에 `900101-1234568` 입력 후 Enter | 전송 차단 + 팝업, 유형 "주민등록번호" 표시 | ☐ |
+| E-02 | 같은 입력에서 전송 버튼 클릭 | 차단 | ☐ |
+| E-03 | 정상 문장 전송 | 그대로 전송됨 | ☐ |
+| E-04 | 팝업 "안전하게 전송하기" | CloudFront 웹(`webBase`)이 새 탭으로 열림 | ☐ |
+| E-05 | 차단 직후 관리자 콘솔 최근 이벤트 | `BLOCK / RRN / extension` 한 줄, 원문 없음 | ☐ |
+| E-06 | API 주소를 잘못 입력(서버 무응답) | fail-closed 팝업, 전송 차단 | ☐ |
+| E-07 | 팝업에서 fail-closed 해제 후 같은 상황 | 검사 없이 전송됨(설정 동작 확인 후 다시 켜기) | ☐ |
+| E-08 | 콜드 스타트 직후 첫 전송(예열 전) | 5초 타임아웃 안에 결과, 초과 시 fail-closed | ☐ |
+| E-09 | 5만 자 초과 입력 끝에 전화번호 | 조각 검사로 차단 | ☐ |
+| E-10 | `ALLOWED_ORIGINS`에 확장 ID 누락 | 연결 확인 실패 메시지(원인 안내) | ☐ |

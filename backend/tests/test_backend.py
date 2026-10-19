@@ -666,3 +666,39 @@ def test_missing_s3_upload_without_list_bucket_permission_stays_pending(env):
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "UPLOAD_INCOMPLETE"
     assert app.state.store.transfer(pending["id"])["status"] == "PENDING_UPLOAD"
+
+
+def test_extension_log_contract_is_strict_and_type_only(env):
+    # extension/background.js sends exactly {"event","types"}; source is fixed by the server.
+    client, app, _ = env
+    ok = client.post("/api/ext/logs", json={"event": "BLOCK", "types": ["RRN", "PHONE"]})
+    assert ok.status_code == 200 and ok.json() == {"ok": True}
+    for body in (
+        {"event": "BLOCK", "types": ["RRN"], "source": "extension"},
+        {"event": "BLOCK", "types": ["RRN"], "text": "900101-1234568"},
+        {"event": "BLOCK", "types": []},
+        {"event": "BLOCK", "types": ["SSN"]},
+        {"event": "SCAN", "types": ["RRN"]},
+    ):
+        assert client.post("/api/ext/logs", json=body).status_code == 422
+    rows = app.state.store.query_day("events", now().date().isoformat())
+    assert [(r["event"], r["source"], r["types"]) for r in rows] == [
+        ("BLOCK", "extension", ["PHONE", "RRN"])
+    ]
+
+
+def test_every_admin_route_requires_session_by_default(env, admin):
+    client, app, _ = env
+    paths = {
+        path
+        for path in app.openapi()["paths"]
+        if path.startswith("/api/admin/") and path != "/api/admin/login"
+    }
+    assert paths  # guard against the prefix check silently matching nothing
+    for path in paths:
+        concrete = path.replace("{identifier}", "x")
+        for method in ("GET", "POST", "DELETE"):
+            response = client.request(method, concrete)
+            assert response.status_code in (401, 405), (method, path, response.status_code)
+            wrong = client.request(method, concrete, headers={"Authorization": "Bearer nope"})
+            assert wrong.status_code in (401, 405), (method, path, wrong.status_code)
