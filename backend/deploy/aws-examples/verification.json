@@ -1,0 +1,10 @@
+{
+  "upload": "passed",
+  "presigned_download": "passed",
+  "anonymous_download_blocked": "passed",
+  "sse_s3": "passed",
+  "expired_url_blocked": "passed",
+  "revoke": "passed",
+  "revoked_url_blocked": "passed",
+  "qr": "passed"
+}

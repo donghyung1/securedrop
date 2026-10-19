@@ -1,0 +1,12 @@
+{
+  "TagSet": [
+    {
+      "Key": "Project",
+      "Value": "SecureDropCloud"
+    },
+    {
+      "Key": "ManagedBy",
+      "Value": "AWSCLI"
+    }
+  ]
+}

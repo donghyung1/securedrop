@@ -1,0 +1,8 @@
+{
+  "bucket": "securedrop-cloud-123456789012-ap-northeast-2",
+  "role_arn": "arn:aws:iam::123456789012:role/securedrop-cloud-backend",
+  "profile": "default",
+  "region": "ap-northeast-2",
+  "account_id": "123456789012",
+  "instance_profile": "securedrop-cloud-backend"
+}

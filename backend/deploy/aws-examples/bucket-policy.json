@@ -1,0 +1,20 @@
+{
+  "Statement": [
+    {
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      },
+      "Effect": "Deny",
+      "Resource": [
+        "arn:aws:s3:::securedrop-cloud-123456789012-ap-northeast-2",
+        "arn:aws:s3:::securedrop-cloud-123456789012-ap-northeast-2/*"
+      ],
+      "Action": "s3:*",
+      "Principal": "*",
+      "Sid": "DenyInsecureTransport"
+    }
+  ],
+  "Version": "2012-10-17"
+}

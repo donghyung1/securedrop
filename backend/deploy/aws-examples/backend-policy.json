@@ -1,0 +1,15 @@
+{
+  "Statement": [
+    {
+      "Sid": "TransferObjectsOnly",
+      "Resource": "arn:aws:s3:::securedrop-cloud-123456789012-ap-northeast-2/transfers/*",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow"
+    }
+  ],
+  "Version": "2012-10-17"
+}

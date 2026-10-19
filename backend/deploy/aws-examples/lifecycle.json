@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-transfers-after-one-day",
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "Filter": {
+        "Prefix": "transfers/"
+      },
+      "Status": "Enabled"
+    }
+  ]
+}
