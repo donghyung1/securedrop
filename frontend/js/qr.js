@@ -1,5 +1,7 @@
-// QR 결과 카드: QR 이미지, 만료 카운트다운, 링크 복사·폐기
+// QR 결과 카드 (여정 7): QR, 만료 카운트다운, 다운로드 수, 링크 복사·폐기
+// 폐기·상태 조회는 관리 토큰(X-Manage-Token)이 필요하다.
 import { api, ApiError } from "./api.js";
+import { getToken, removeToken } from "./manage.js";
 import { toast } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
@@ -14,17 +16,19 @@ function bindOnce() {
   bound = true;
   $("btn-copy").addEventListener("click", copyLink);
   $("btn-revoke").addEventListener("click", revoke);
+  $("btn-refresh").addEventListener("click", refreshStatus);
   $("btn-new").addEventListener("click", () => onNewHandler());
 }
 
+// transfer: /complete 응답 { id, status, share_url, qr, expires_at }
 export function showTransfer(transfer, { onNew }) {
   bindOnce();
   current = transfer;
   onNewHandler = onNew;
   $("qr-img").src = transfer.qr;
-  $("qr-status").textContent = "링크 활성";
-  $("btn-revoke").disabled = false;
-  $("btn-copy").disabled = false;
+  $("qr-img").classList.remove("is-dead");
+  $("qr-status").textContent = "링크 활성 · 다운로드 0회";
+  for (const id of ["btn-revoke", "btn-copy", "btn-refresh"]) $(id).disabled = false;
   $("qr-card").hidden = false;
   startCountdown(Date.parse(transfer.expires_at));
 }
@@ -45,6 +49,7 @@ function startCountdown(expiresAt) {
     if (left === 0) {
       clearInterval(timer);
       markInactive("만료됨 · 더 이상 다운로드할 수 없습니다");
+      if (current) removeToken(current.id);
     }
   };
   tick();
@@ -54,26 +59,46 @@ function startCountdown(expiresAt) {
 function markInactive(text) {
   $("qr-status").textContent = text;
   $("qr-img").classList.add("is-dead");
-  $("btn-revoke").disabled = true;
-  $("btn-copy").disabled = true;
+  for (const id of ["btn-revoke", "btn-copy", "btn-refresh"]) $(id).disabled = true;
 }
 
 async function copyLink() {
   if (!current) return;
   try {
-    // download_url: 서버의 짧은 공유 주소(/d/{id}). url은 구버전 호환용 S3 Presigned URL
-    await navigator.clipboard.writeText(current.download_url || current.url);
+    await navigator.clipboard.writeText(current.share_url);
     toast("링크를 복사했습니다.");
   } catch {
     toast("복사에 실패했습니다.");
   }
 }
 
+async function refreshStatus() {
+  if (!current) return;
+  try {
+    const t = await api.getTransfer(current.id, getToken(current.id));
+    $("qr-status").textContent = `링크 활성 · 다운로드 ${t.download_count}회`;
+  } catch (e) {
+    const err = e instanceof ApiError ? e : new ApiError("INTERNAL_ERROR");
+    if (err.code === "EXPIRED" || err.code === "NOT_FOUND") {
+      clearInterval(timer);
+      markInactive(err.code === "EXPIRED" ? "만료됨" : "폐기됨");
+    } else {
+      toast(err.userMessage);
+    }
+  }
+}
+
 async function revoke() {
   if (!current) return;
+  const token = getToken(current.id);
+  if (!token) {
+    toast("이 탭에 관리 토큰이 없어 폐기할 수 없습니다. 링크는 만료 시 자동으로 정리됩니다.");
+    return;
+  }
   $("btn-revoke").disabled = true;
   try {
-    await api.revokeTransfer(current.id);
+    await api.revokeTransfer(current.id, token);
+    removeToken(current.id);
     clearInterval(timer);
     markInactive("폐기됨 · 링크 접근이 차단되었습니다");
     toast("링크를 폐기했습니다.");

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>파일 받기 · SecureDrop</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="dl-body">
+  <main class="dl-main">
+    <div class="brand dl-brand">SecureDrop <span>Cloud</span></div>
+
+    <div class="card dl-card">
+      <div id="dl-loading" class="status is-loading">파일 정보를 불러오는 중…</div>
+
+      <div id="dl-ready" hidden>
+        <h1 class="dl-title">파일이 도착했습니다</h1>
+        <p class="muted">링크 만료까지 <strong id="dl-countdown">--:--</strong></p>
+        <ul id="dl-files" class="dl-files"></ul>
+        <p class="muted small">PC에서 보낸 파일입니다. 앱 설치나 로그인 없이 바로 저장됩니다.</p>
+      </div>
+
+      <div id="dl-error" hidden>
+        <h1 id="dl-error-title" class="dl-title"></h1>
+        <p id="dl-error-text" class="muted"></p>
+      </div>
+    </div>
+
+    <span id="api-mode" class="badge dl-badge"></span>
+  </main>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script type="module" src="js/download.js"></script>
+</body>
+</html>

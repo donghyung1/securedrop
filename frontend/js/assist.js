@@ -67,6 +67,12 @@ export function showDeferred(filename, reason) {
   setButtons([]);
 }
 
+export function showSent(filename) {
+  clear();
+  say(`${filename} 전송 링크를 만들었습니다. 휴대폰으로 QR 코드를 스캔하세요. 필요 없어지면 바로 폐기할 수 있습니다.`, "ok");
+  setButtons([]);
+}
+
 export function showUnscannable(filename, reason) {
   clear();
   say(`${filename}: ${reason} 내용을 확인한 뒤 전송 여부를 직접 결정해 주세요.`, "warn");

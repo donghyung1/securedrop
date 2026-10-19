@@ -1,22 +1,21 @@
-// 업로드 화면: STEP 1(파일 선택) → STEP 2(/api/scan/file 즉시 검사) → 전송 → QR
-// 정제(STEP 3~4)는 Day 3에 assist.js / sanitize 흐름으로 연결한다.
-import { api, CONFIG, ApiError, typeLabel } from "./api.js";
+// 업로드 화면 (PRD v1.3 §4 여정 1·2·6·7)
+// STEP 1 파일 선택 → STEP 2 /api/scan/file 즉시 검사 → 전송: 해시 → /api/transfers → S3 직접 업로드 → /complete → QR
+// 정제(여정 3·4)는 Day 3에 assist.js + api.sanitize로 연결한다. sendBlob()은 처리본 전송에도 그대로 쓴다.
+import { api, CONFIG, ApiError, typeLabel, extOf, mimeOf, sha256Hex } from "./api.js";
 import * as guard from "./assist.js";
+import { saveToken } from "./manage.js";
 import { showTransfer, hideTransfer } from "./qr.js";
-import { toast } from "./ui.js";
+import { toast, fmtSize } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
 const MB = 1024 * 1024;
 
-// 현재 선택된 파일의 상태
-// scan: "idle" | "scanning" | "clean" | "blocked" | "unscannable" | "deferred" | "error"
-//   unscannable: 검사 미지원 형식 → 사용자 확인 후 confirm_unscanned=true 로 전송
-//   deferred:    5MB 초과 .txt/.csv → 미리 검사는 못 하지만 서버가 전송 시점에 검사한다
-let state = { file: null, scan: "idle", findings: [], reason: "" };
+// scan: "idle" | "scanning" | "clean" | "blocked" | "unscannable" | "error"
+//   unscannable: .txt/.csv 외 형식이거나 4MB 초과 → acknowledge_unsupported 로 전송
+//   (v1.3에서는 파일이 Lambda를 거치지 않고 S3로 가므로 4MB 초과 파일은 서버도 검사할 수 없다)
+let state = { file: null, scan: "idle", scanResult: null, reason: "" };
 let scanToken = 0; // 검사 중 다른 파일을 고르면 이전 응답은 버린다
-
-const extOf = (name) => (name.split(".").pop() || "").toLowerCase();
-const fmtSize = (b) => (b < MB ? `${(b / 1024).toFixed(1)} KB` : `${(b / MB).toFixed(1)} MB`);
+let sending = false;
 
 export function initUpload() {
   const input = $("file-input");
@@ -31,7 +30,7 @@ export function initUpload() {
 
   $("btn-reset").addEventListener("click", reset);
   $("confirm-check").addEventListener("change", updateSendButton);
-  $("btn-send").addEventListener("click", send);
+  $("btn-send").addEventListener("click", sendSelected);
 
   const sel = $("expires");
   for (const o of CONFIG.EXPIRES_OPTIONS) {
@@ -43,14 +42,16 @@ export function initUpload() {
 }
 
 function reset() {
+  if (sending) return;
   scanToken++;
-  state = { file: null, scan: "idle", findings: [], reason: "" };
+  state = { file: null, scan: "idle", scanResult: null, reason: "" };
   $("file-input").value = "";
   $("dropzone").hidden = false;
   $("file-info").hidden = true;
   $("scan-card").hidden = true;
   $("send-card").hidden = true;
   $("send-error").hidden = true;
+  setProgress(null);
   hideTransfer();
   guard.reset();
   setStep(1);
@@ -59,11 +60,16 @@ function reset() {
 // ---------------------------------------------------------------- STEP 1 → 2
 
 async function selectFile(file) {
+  if (sending) return;
   reset();
   const ext = extOf(file.name);
 
   if (!CONFIG.ALLOWED_EXTS.includes(ext)) {
     toast(`.${ext} 형식은 업로드할 수 없습니다.`);
+    return;
+  }
+  if (file.size === 0) {
+    toast("빈 파일은 보낼 수 없습니다.");
     return;
   }
   if (file.size > CONFIG.MAX_FILE_MB * MB) {
@@ -84,11 +90,7 @@ async function selectFile(file) {
     return markUnscannable("이 형식은 민감정보 검사를 지원하지 않습니다.");
   }
   if (file.size > CONFIG.SCAN_FILE_MAX_MB * MB) {
-    // 업로드(20MB)는 되지만 미리 검사(5MB)는 안 되는 구간
-    state.reason = `${CONFIG.SCAN_FILE_MAX_MB}MB를 넘는 파일은 미리 검사할 수 없어 전송할 때 검사합니다.`;
-    setScan("deferred");
-    guard.showDeferred(file.name, state.reason);
-    return;
+    return markUnscannable(`${CONFIG.SCAN_FILE_MAX_MB}MB를 넘는 파일은 민감정보 검사를 할 수 없습니다.`);
   }
   await runScan(file);
 }
@@ -99,11 +101,11 @@ async function runScan(file) {
   try {
     const res = await api.scanFile(file);
     if (token !== scanToken) return;
-    state.findings = res.findings || [];
+    state.scanResult = res;
     if (res.blocked) {
       setScan("blocked");
       setStep(3);
-      guard.showFindings(file.name, state.findings);
+      guard.showFindings(file.name, res.findings);
     } else {
       setScan("clean");
       guard.showClean(file.name);
@@ -111,12 +113,8 @@ async function runScan(file) {
   } catch (e) {
     if (token !== scanToken) return;
     const err = e instanceof ApiError ? e : new ApiError("INTERNAL_ERROR");
-    if (err.code === "UNSUPPORTED_TYPE") {
+    if (err.code === "UNSUPPORTED_TYPE" || err.code === "FILE_TOO_LARGE") {
       markUnscannable(err.userMessage);
-    } else if (err.code === "FILE_TOO_LARGE") {
-      state.reason = err.userMessage + " 전송할 때 검사합니다.";
-      setScan("deferred");
-      guard.showDeferred(file.name, state.reason);
     } else {
       // 검사 실패 시 전송을 막는다(fail-closed). 다시 검사만 허용.
       state.reason = err.userMessage;
@@ -150,10 +148,11 @@ function setScan(scan) {
       status.textContent = "민감정보가 발견되지 않았습니다.";
       break;
     case "blocked": {
+      const findings = state.scanResult.findings;
       status.classList.add("is-danger");
-      const total = state.findings.reduce((n, f) => n + f.count, 0);
+      const total = findings.reduce((n, f) => n + f.count, 0);
       status.textContent = `${state.file.name}에서 민감정보 ${total}건이 발견되어 원본 전송을 보류했습니다.`;
-      for (const f of state.findings) {
+      for (const f of findings) {
         const li = document.createElement("li");
         li.innerHTML = `<span></span><strong></strong>`;
         li.children[0].textContent = typeLabel(f.type);
@@ -163,7 +162,6 @@ function setScan(scan) {
       break;
     }
     case "unscannable":
-    case "deferred":
       status.classList.add("is-warn");
       status.textContent = state.reason;
       break;
@@ -182,11 +180,10 @@ function setScan(scan) {
   updateSendButton();
 }
 
-// 확인이 필요한 경우: 검사 불가 형식, 또는 민감정보가 있는 원본을 그대로 보낼 때
+// 확인이 필요한 경우: 검사 불가(acknowledge_unsupported), 민감정보 원본 그대로 전송(acknowledge_risk)
 function renderConfirm() {
   const row = $("confirm-row");
-  const check = $("confirm-check");
-  check.checked = false;
+  $("confirm-check").checked = false;
   if (state.scan === "unscannable") {
     $("confirm-text").textContent = "민감정보 검사 없이 전송된다는 것을 확인했습니다.";
     row.hidden = false;
@@ -200,8 +197,8 @@ function renderConfirm() {
 
 function updateSendButton() {
   const needsConfirm = state.scan === "unscannable" || state.scan === "blocked";
-  const ok = state.scan === "clean" || state.scan === "deferred" || (needsConfirm && $("confirm-check").checked);
-  $("btn-send").disabled = !ok;
+  const ok = state.scan === "clean" || (needsConfirm && $("confirm-check").checked);
+  $("btn-send").disabled = sending || !ok;
 }
 
 function setStep(n) {
@@ -212,44 +209,84 @@ function setStep(n) {
   });
 }
 
+// label: 단계 문구, ratio: 0~1 (null이면 숨김)
+function setProgress(label, ratio = 0) {
+  const box = $("send-progress");
+  if (label === null) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  $("progress-label").textContent = label;
+  $("progress-bar").style.width = `${Math.round(ratio * 100)}%`;
+}
+
 // ---------------------------------------------------------------- 전송
 
-async function send() {
-  const btn = $("btn-send");
+function sendSelected() {
+  const ref = state.scanResult ? { scan_id: state.scanResult.scan_id } : {};
+  return sendBlob({
+    blob: state.file,
+    name: state.file.name,
+    type: mimeOf(state.file),
+    ref,
+    expectedSha256: state.scanResult?.sha256,
+    acknowledgeRisk: state.scan === "blocked",
+    acknowledgeUnsupported: state.scan === "unscannable",
+  });
+}
+
+// 원본·처리본 공통 전송. ref: { scan_id } | { sanitize_id } | {}
+export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowledgeRisk = false, acknowledgeUnsupported = false }) {
   const errBox = $("send-error");
   errBox.hidden = true;
-  btn.disabled = true;
-  btn.textContent = "업로드 중…";
+  sending = true;
+  updateSendButton();
+  $("btn-reset").disabled = true;
   try {
-    const transfer = await api.createTransfer({
-      file: state.file,
-      expiresIn: Number($("expires").value),
-      confirmSensitive: state.scan === "blocked",
-      confirmUnscanned: state.scan === "unscannable",
+    setProgress("파일 확인 중…", 0);
+    const sha256 = await sha256Hex(blob);
+    if (expectedSha256 && sha256 !== expectedSha256) {
+      throw new ApiError("VALIDATION_ERROR", "검사 후 파일이 바뀌었습니다. 파일을 다시 선택하세요.");
+    }
+
+    setProgress("업로드 준비 중…", 0);
+    const created = await api.createTransfer({
+      files: [{ name, size: blob.size, type, sha256 }],
+      ...ref,
+      expires_in: Number($("expires").value),
+      encrypted: false,
+      acknowledge_risk: acknowledgeRisk,
+      acknowledge_unsupported: acknowledgeUnsupported,
     });
+    // 관리 토큰은 이 응답에만 온다 — 바로 보관
+    saveToken(created.id, created.manage_token);
+
+    await api.uploadToS3(created.uploads[0], blob, (r) => setProgress(`업로드 중… ${Math.round(r * 100)}%`, r));
+
+    setProgress("업로드 확인 중…", 1);
+    const done = await api.completeTransfer(created.id, created.manage_token);
+    saveToken(created.id, created.manage_token, done.expires_at);
+
+    setProgress(null);
     setStep(5);
     $("send-card").hidden = true;
-    showTransfer(transfer, { onNew: reset });
+    guard.showSent(name);
+    showTransfer(done, { onNew: reset });
   } catch (e) {
     const err = e instanceof ApiError ? e : new ApiError("INTERNAL_ERROR");
-    btn.textContent = "QR 코드 만들기";
-    // 서버가 전송 시점 검사에서 막은 경우 → 화면 상태를 서버 판정에 맞춘다
-    if (err.code === "SENSITIVE_DATA" && err.body?.findings) {
-      state.findings = err.body.findings;
-      setScan("blocked");
-      setStep(3);
-      guard.showFindings(state.file.name, state.findings);
-      return;
-    }
-    if (err.code === "UNSUPPORTED_TYPE" && err.body?.confirmation_required) {
-      markUnscannable(err.userMessage);
-      return;
-    }
+    setProgress(null);
     errBox.textContent = err.userMessage;
     errBox.hidden = false;
-    updateSendButton();
+    if (err.code === "EXPIRED" && state.file && state.scanResult) {
+      // 검사 세션(10분)이 만료됨 → 다시 검사하고 사용자가 다시 누르게 한다
+      errBox.textContent = "검사 결과가 만료되어 다시 검사했습니다. 다시 전송하세요.";
+      runScan(state.file);
+    }
   } finally {
-    btn.textContent = "QR 코드 만들기";
+    sending = false;
+    $("btn-reset").disabled = false;
+    updateSendButton();
   }
 }
 
@@ -261,6 +298,6 @@ function handleGuardAction(action) {
     toast("전송을 취소했습니다.");
     return;
   }
-  // MASK / DELETE → Day 3에 /api/sanitize 흐름(STEP 4) 연결
+  // MASK / DELETE → Day 3에 /api/sanitize → 미리보기 승인 → sendBlob({ ref: { sanitize_id } }) 연결
   toast("정제 흐름은 Day 3에 연결됩니다.");
 }
