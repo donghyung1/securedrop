@@ -34,12 +34,26 @@
 - **C**: 배포 시 `admin.html·js·css`와 `config.js`(`apiBase`, 선택 `cloudwatchUrl`)를 같은 웹 버킷에 포함. 확장 zip(`/download/securedrop-extension.zip`) 업로드. 현재 `admin.js`는 `window.SD_CONFIG.apiBase`를 읽는다.
 - **디렉터리**: PRD는 `frontend/`이지만 A가 `backend/frontend/`에 두었다. 위치가 정해지면 `admin.*`도 같이 옮긴다.
 
-## Day 5 보안 점검 체크리스트
+## Day 5 보안 점검 결과 (2026-10-19, 배포 환경 외부 관점)
 
-- [ ] 두 S3 버킷 퍼블릭 액세스 차단 4개 항목 켬, 웹 버킷 S3 주소 직접 접근 403
-- [ ] CloudWatch Logs·DynamoDB 검색: 주민번호·전화번호 등 원문, 파일명, Presigned URL, 토큰 없음
-- [ ] 저장소 전체 검색: AWS 키(`AKIA`), API Key, 확장 ID 외 비밀값 없음 (`git grep -nE "AKIA|sk-|api[_-]?key"`)
-- [ ] 관리자 콘솔 화면·응답에 파일명·내용·다운로드 링크 없음
-- [ ] `sd_admins`에 scrypt 해시만, 토큰 컬럼은 SHA-256만
-- [ ] 확장 fail-closed 기본값 유지, 시연 전 예열(`/api/health`)
-- [ ] 오탐·미탐 표(`tests/test_cases.md`)의 "실제 결과" 열을 배포 환경에서 다시 채움
+AWS 자격 증명 없이 공개 주소로 확인할 수 있는 항목만 점검했다. CloudWatch·DynamoDB 내부 확인은 AWS 권한이 있는 사람이 해야 한다.
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| 파일 버킷 익명 접근 | ✅ 차단 | 목록·객체 GET·HTTP(비TLS) 모두 403 |
+| 웹 버킷 S3 주소 직접 접근 | ✅ 차단 | `securedrop-web-<acct>-ap-northeast-2` 직접 GET 403 (CloudFront로만 제공) |
+| CloudFront 보안 헤더 | ✅ | HSTS, nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer, CSP(`script-src 'self'`, `connect-src`는 API·파일 버킷만), HTTP→HTTPS 301 |
+| 관리자 API 인증 | ✅ | 토큰 없이/가짜 토큰으로 `/api/admin/*` 401 |
+| 플러그인 API Key | ✅ | 키 없이 `/api/plugin/scan` 403 |
+| 관리 토큰 | ✅ | 임의 전송 ID 조회 404(존재 여부 외 정보 없음) |
+| CORS | ✅ | 허용되지 않은 Origin에는 `Access-Control-Allow-Origin`을 붙이지 않음 |
+| 오류 응답 | ✅ | 입력 오류가 값 원문을 되돌려주지 않음, 로그인 실패 문구 동일 |
+| 저장소 비밀값 | ✅ | 추적 파일·git 이력에 실제 키·토큰 없음. `AKIAIOSFODNN7EXAMPLE`은 AWS 공식 예시 값(샘플 파일). `.env`·`aws/` 산출물 미추적 |
+| 로그·DynamoDB에 원문 없음 | ☐ 미확인 | AWS 접근 필요: 로그 그룹에서 전화번호·`AKIA`·`sk-` 검색, `sd_events`·`sd_transfers` 항목 확인 |
+| `sd_admins`는 scrypt 해시, 토큰은 SHA-256만 | ☐ 미확인 | AWS 접근 필요(자동 테스트는 통과) |
+| 두 버킷 Block Public Access 4개 설정 | ☐ 미확인 | 외부에서는 403으로만 확인, 콘솔에서 설정값 확인 필요 |
+
+### 남은 점검
+- [ ] 위 "미확인" 3건 (AWS 콘솔 또는 개발자 프로필로)
+- [ ] 시연 전 예열(`/api/health`)
+- [ ] 오탐·미탐 표(`tests/test_cases.md` 1~3장)의 "실제 결과" 열을 배포 환경에서 다시 채움
