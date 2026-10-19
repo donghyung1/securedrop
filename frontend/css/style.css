@@ -138,6 +138,13 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
 .bubble-danger { background: var(--danger-bg); }
 .guard-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .guard-buttons:empty { display: none; }
+.bubble-user { align-self: flex-end; background: var(--primary); color: var(--primary-ink); max-width: 85%; }
+.guard-form { display: flex; gap: 6px; margin-top: 12px; }
+.guard-form input {
+  flex: 1; min-width: 0; font: inherit; font-size: 0.92rem;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---------- 토스트 ---------- */
 .toast {

@@ -67,6 +67,9 @@ export function openSelect(file, findings, preset) {
   updateButton();
 }
 
+// 현재 유형별 선택 (선택 화면을 연 적이 없으면 빈 객체)
+export const getChoices = () => ({ ...ctx.choices });
+
 export function hideSanitize() {
   $("sanitize-card").hidden = true;
   $("preview-card").hidden = true;
