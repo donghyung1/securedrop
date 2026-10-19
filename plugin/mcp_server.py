@@ -20,6 +20,7 @@ Claude 같은 MCP 클라이언트가 SecureDrop을 "승인된 통로"로만 쓰�
 """
 
 import base64
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -34,6 +35,9 @@ from mcp.types import ToolAnnotations
 API_BASE = os.environ.get("SECUREDROP_API_BASE", "").rstrip("/")
 API_KEY = os.environ.get("SECUREDROP_API_KEY", "")
 ALLOWED_DIR = Path(os.environ.get("SECUREDROP_ALLOWED_DIR") or Path.cwd()).resolve()
+
+# httpx는 요청 URL을 INFO로 남긴다. 운영 로그에 요청 정보를 남기지 않도록 끈다 (PRD 7장 로깅)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 SCAN_EXTENSIONS = {".txt", ".csv"}
 MAX_BYTES = 4 * 1024 * 1024  # 플러그인 전송 상한 (Lambda 페이로드 한도, PRD F4)
