@@ -302,15 +302,26 @@ function sanitizedName(name) {
 
 // ---------------------------------------------------------------- 정제 흐름 (여정 3·4)
 
-function enterSelect(preset) {
+// preset: "MASK" | "DELETE" (전체) 또는 { TYPE: "MASK" | "DELETE" | "SKIP" }
+function enterSelect(preset, { quiet = false } = {}) {
   if (state.scan !== "blocked" || sending) return;
   state.mode = "select";
   state.sanitized = null;
   setStep(3);
   sanitize.openSelect(state.file, state.scanResult.findings, preset);
-  guard.showSelecting(preset);
+  if (!quiet) guard.showSelecting(preset);
   renderConfirm();
   updateSendButton();
+}
+
+// 자연어 해석 결과 { action, targets } → 선택 화면에 채운다 (처리는 사용자가 "처리본 만들기"로 확정)
+// 처음이면 언급한 유형만 적용하고 나머지는 그대로 두기, 이미 고르던 중이면 기존 선택에 더한다.
+function applyAssist({ action, targets }) {
+  const base = state.mode === "original"
+    ? Object.fromEntries(state.scanResult.findings.map((f) => [f.type, "SKIP"]))
+    : sanitize.getChoices();
+  for (const t of targets) base[t] = action;
+  enterSelect(base, { quiet: true });
 }
 
 function handleSanitized(res, actions) {
@@ -441,7 +452,9 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
 // ---------------------------------------------------------------- SecureGuard 버튼
 
 function handleGuardAction(action) {
-  if (action === "CANCEL") {
+  if (typeof action === "object") {
+    applyAssist(action);
+  } else if (action === "CANCEL") {
     reset();
     toast("전송을 취소했습니다.");
   } else if (action === "MASK" || action === "DELETE") {

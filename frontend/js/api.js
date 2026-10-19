@@ -170,6 +170,15 @@ const MOCK_PATTERNS = {
   API_KEY: /\b(?:sk|ghp|xox[bp])[-_][A-Za-z0-9_-]{16,}\b/g,
   CARD: /\b\d{4}-\d{4}-\d{4}-\d{4}\b/g,
 };
+// intent.py ALIASES와 같은 순서·단어
+const MOCK_ALIASES = {
+  RRN: ["주민", "rrn"],
+  PHONE: ["전화", "휴대폰", "휴대전화", "phone"],
+  EMAIL: ["이메일", "메일", "email"],
+  AWS_ACCESS_KEY: ["aws", "액세스 키", "access key"],
+  API_KEY: ["api", "토큰", "token", "비밀 키"],
+  CARD: ["카드", "card"],
+};
 const MB = 1024 * 1024;
 const MOCK_KEY = "sd.mock.transfers";
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -287,21 +296,42 @@ const mockApi = {
     };
   },
 
+  // 서버 intent.py 규칙을 그대로 옮김: 키워드 → 고정 조치, 부정·혼합·모호한 요청은 CLARIFY
   async assist(message, context) {
     await delay(300);
-    const all = (context?.findings || []).map((f) => f.type);
+    const text = message.toLowerCase();
+    const findings = context?.findings || [];
+    const available = Object.keys(TYPE_LABELS).filter((k) => findings.some((f) => f.type === k));
+    const summary = findings.map((f) => `${TYPE_LABELS[f.type]} ${f.count}건`).join(", ");
+    const explanation = findings.length ? `${summary}이 감지되어 원본 전송을 보류했습니다.` : "탐지된 민감정보가 없습니다.";
     const options = [
-      { label: "마스킹", action: "MASK", targets: all },
-      { label: "해당 항목 삭제", action: "DELETE", targets: all },
-      { label: "전송 취소", action: "CANCEL", targets: [] },
+      { action: "MASK", targets: available, label: "마스킹" },
+      { action: "DELETE", targets: available, label: "해당 항목 삭제" },
+      { action: "CANCEL", targets: [], label: "전송 취소" },
     ];
-    if (/취소|그만/.test(message)) return { action: "CANCEL", targets: [], reply: "전송을 취소했습니다.", options };
-    const targets = Object.entries(TYPE_LABELS)
-      .filter(([, label]) => message.includes(label.slice(0, 4)))
-      .map(([code]) => code);
-    if (/삭제|지워/.test(message)) return { action: "DELETE", targets, reply: "해당 항목을 삭제하겠습니다.", options };
-    if (/가려|마스킹|숨겨/.test(message)) return { action: "MASK", targets, reply: "해당 항목을 마스킹하겠습니다.", options };
-    return { action: "CLARIFY", targets: [], reply: "마스킹·삭제·취소 중 어떤 조치를 원하시나요?", options };
+    const has = (words) => words.some((w) => text.includes(w));
+    const mask = has(["마스킹", "가려", "가리", "가려줘", "가리고", "mask"]);
+    const del = has(["삭제", "지워", "제거", "delete", "remove"]);
+    const cancel = has(["취소", "cancel"]);
+    const ambiguous = has(["말고", "하지", "않", "빼고", "제외"]);
+    let action = "CLARIFY", targets = [];
+    if (cancel && !mask && !del && !ambiguous) {
+      action = "CANCEL";
+    } else if (mask !== del && !cancel && !ambiguous) {
+      let mentioned = Object.entries(MOCK_ALIASES).filter(([, ws]) => has(ws)).map(([k]) => k);
+      if (/전체|모두|전부|\ball\b/.test(text) && !mentioned.length) mentioned = available;
+      if (mentioned.length && mentioned.every((k) => available.includes(k))) {
+        action = mask ? "MASK" : "DELETE";
+        targets = mentioned;
+      }
+    }
+    const reply = {
+      CLARIFY: explanation + " 처리할 유형과 조치를 버튼으로 선택하세요.",
+      MASK: "선택한 유형을 마스킹한 처리본을 만들고 재검사합니다. 미리보기 확인과 승인 후 전송하세요.",
+      DELETE: "선택한 민감정보 값을 삭제한 처리본을 만들고 재검사합니다. 미리보기 확인과 승인 후 전송하세요.",
+      CANCEL: "전송을 취소하세요. 파일은 전송하지 않습니다.",
+    }[action];
+    return { action, targets, reply, options };
   },
 
   // A의 v1.3 백엔드 검증 순서를 따른다:

@@ -126,6 +126,12 @@
             <p class="bubble">파일을 선택하면 민감정보를 검사하고 결과를 설명해 드립니다.</p>
           </div>
           <div id="guard-buttons" class="guard-buttons"></div>
+          <form id="guard-form" class="guard-form" hidden>
+            <label for="guard-input" class="sr-only">SecureGuard에게 요청하기</label>
+            <input id="guard-input" type="text" maxlength="2000" autocomplete="off"
+                   placeholder="예: 주민등록번호만 가리고 보내줘">
+            <button id="guard-send" class="btn btn-primary btn-sm" type="submit">보내기</button>
+          </form>
         </div>
       </aside>
     </div>
