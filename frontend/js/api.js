@@ -298,31 +298,33 @@ const mockApi = {
     return { action: "CLARIFY", targets: [], reply: "마스킹·삭제·취소 중 어떤 조치를 원하시나요?", options };
   },
 
-  // 서버 검증 순서 (§9): ① 크기·확장자·개수 → ② 세션 존재·만료 → ③ 민감정보면 clean 처리본 또는 acknowledge_risk
-  // → ④ 미지원 형식이면 acknowledge_unsupported → ⑤ 요청 해시 = 세션 해시
+  // A의 v1.3 백엔드 검증 순서를 따른다:
+  // 개수·크기 → 확장자 → .txt/.csv는 검사·정제 참조 필수 / 그 외는 acknowledge_unsupported
+  // → 처리본은 user_approved → 민감정보 남으면 acknowledge_risk (409) → 요청 해시 = 세션 해시 (409)
   async createTransfer(body) {
     await delay(300);
-    const { files, scan_id, sanitize_id, expires_in, acknowledge_risk, acknowledge_unsupported } = body;
+    const { files, scan_id, sanitize_id, expires_in, acknowledge_risk, acknowledge_unsupported, user_approved } = body;
     if (![300, 600, 3600].includes(expires_in)) {
-      throw new ApiError("VALIDATION_ERROR", "만료 시간은 5분, 10분, 60분 중 선택하세요.", 422);
+      throw new ApiError("VALIDATION_ERROR", "만료 시간은 300, 600, 3600초 중 선택하세요.", 422);
     }
     if (!Array.isArray(files) || files.length !== 1) throw new ApiError("VALIDATION_ERROR", "파일을 하나 선택하세요.", 422);
     const f = files[0];
+    if (f.size > CONFIG.MAX_FILE_MB * MB) throw new ApiError("FILE_TOO_LARGE", "전송 파일은 합계 20MiB 이하여야 합니다.", 413);
     if (!CONFIG.ALLOWED_EXTS.includes(extOf(f.name))) throw new ApiError("VALIDATION_ERROR", "허용되지 않는 파일 형식입니다.", 422);
-    if (f.size > CONFIG.MAX_FILE_MB * MB) throw new ApiError("FILE_TOO_LARGE", null, 413);
 
-    const ref = scan_id || sanitize_id;
-    if (ref) {
-      const s = mockSession(ref);
-      if (s.kind === "SANITIZE" && !s.clean && !acknowledge_risk) {
-        throw new ApiError("SENSITIVE_REMAINS", null, 409);
-      }
-      if (s.kind === "SCAN" && !s.clean && !acknowledge_risk) {
-        throw new ApiError("VALIDATION_ERROR", "민감정보가 있는 파일은 정제하거나 위험을 확인한 뒤 전송할 수 있습니다.", 422);
-      }
-      if (s.sha256 !== f.sha256) throw new ApiError("VALIDATION_ERROR", "검사한 파일과 전송할 파일이 다릅니다.", 422);
+    const ref = sanitize_id || scan_id;
+    const s = ref ? mockSession(ref) : null;
+    if (CONFIG.SCANNABLE_EXTS.includes(extOf(f.name))) {
+      if (!s) throw new ApiError("VALIDATION_ERROR", "검사 또는 정제 참조가 필요합니다.", 422);
     } else if (!acknowledge_unsupported) {
-      throw new ApiError("VALIDATION_ERROR", "민감정보 검사 없이 전송하려면 확인이 필요합니다.", 422);
+      throw new ApiError("VALIDATION_ERROR", "검사 미지원 형식에 대한 확인이 필요합니다.", 422);
+    }
+    if (sanitize_id && !user_approved) throw new ApiError("VALIDATION_ERROR", "처리본 미리보기 승인이 필요합니다.", 422);
+    if (s && !s.clean && !acknowledge_risk) {
+      throw new ApiError("SENSITIVE_REMAINS", "민감정보 정제 또는 위험 확인이 필요합니다.", 409);
+    }
+    if (s && s.sha256 !== f.sha256) {
+      throw new ApiError("INTEGRITY_MISMATCH", "검사·정제 결과 해시가 일치하지 않습니다.", 409);
     }
 
     const id = rid();

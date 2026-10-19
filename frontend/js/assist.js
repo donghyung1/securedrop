@@ -73,6 +73,12 @@ export function showSent(filename) {
   setButtons([]);
 }
 
+export function showRejected(filename, reason) {
+  clear();
+  say(`${filename}: ${reason}`, "danger");
+  setButtons([{ label: "다른 파일 선택", action: "CANCEL" }]);
+}
+
 export function showUnscannable(filename, reason) {
   clear();
   say(`${filename}: ${reason} 내용을 확인한 뒤 전송 여부를 직접 결정해 주세요.`, "warn");

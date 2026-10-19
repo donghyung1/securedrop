@@ -10,9 +10,9 @@ import { toast, fmtSize } from "./ui.js";
 const $ = (id) => document.getElementById(id);
 const MB = 1024 * 1024;
 
-// scan: "idle" | "scanning" | "clean" | "blocked" | "unscannable" | "error"
-//   unscannable: .txt/.csv 외 형식이거나 4MB 초과 → acknowledge_unsupported 로 전송
-//   (v1.3에서는 파일이 Lambda를 거치지 않고 S3로 가므로 4MB 초과 파일은 서버도 검사할 수 없다)
+// scan: "idle" | "scanning" | "clean" | "blocked" | "unscannable" | "rejected" | "error"
+//   unscannable: .txt/.csv 외 형식 → 사용자 확인 후 acknowledge_unsupported 로 전송
+//   rejected:    4MB 초과 .txt/.csv → 검사할 수 없고, 서버는 검사 참조 없는 .txt/.csv를 받지 않으므로 전송 불가
 let state = { file: null, scan: "idle", scanResult: null, reason: "" };
 let scanToken = 0; // 검사 중 다른 파일을 고르면 이전 응답은 버린다
 let sending = false;
@@ -90,7 +90,7 @@ async function selectFile(file) {
     return markUnscannable("이 형식은 민감정보 검사를 지원하지 않습니다.");
   }
   if (file.size > CONFIG.SCAN_FILE_MAX_MB * MB) {
-    return markUnscannable(`${CONFIG.SCAN_FILE_MAX_MB}MB를 넘는 파일은 민감정보 검사를 할 수 없습니다.`);
+    return markRejected(file.name);
   }
   await runScan(file);
 }
@@ -113,7 +113,9 @@ async function runScan(file) {
   } catch (e) {
     if (token !== scanToken) return;
     const err = e instanceof ApiError ? e : new ApiError("INTERNAL_ERROR");
-    if (err.code === "UNSUPPORTED_TYPE" || err.code === "FILE_TOO_LARGE") {
+    if (err.code === "FILE_TOO_LARGE") {
+      markRejected(file.name);
+    } else if (err.code === "UNSUPPORTED_TYPE") {
       markUnscannable(err.userMessage);
     } else {
       // 검사 실패 시 전송을 막는다(fail-closed). 다시 검사만 허용.
@@ -121,6 +123,13 @@ async function runScan(file) {
       setScan("error");
     }
   }
+}
+
+function markRejected(filename) {
+  state.reason = `${CONFIG.SCAN_FILE_MAX_MB}MB를 넘는 .txt·.csv 파일은 민감정보를 검사할 수 없어 보낼 수 없습니다. ${CONFIG.SCAN_FILE_MAX_MB}MB 이하로 나눠서 보내 주세요.`;
+  setScan("rejected");
+  $("send-card").hidden = true;
+  guard.showRejected(filename, state.reason);
 }
 
 function markUnscannable(reason) {
@@ -163,6 +172,10 @@ function setScan(scan) {
     }
     case "unscannable":
       status.classList.add("is-warn");
+      status.textContent = state.reason;
+      break;
+    case "rejected":
+      status.classList.add("is-danger");
       status.textContent = state.reason;
       break;
     case "error": {
@@ -237,7 +250,8 @@ function sendSelected() {
 }
 
 // 원본·처리본 공통 전송. ref: { scan_id } | { sanitize_id } | {}
-export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowledgeRisk = false, acknowledgeUnsupported = false }) {
+// userApproved: 처리본(sanitize_id) 미리보기 승인 — 서버가 필수로 요구
+export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowledgeRisk = false, acknowledgeUnsupported = false, userApproved = false }) {
   const errBox = $("send-error");
   errBox.hidden = true;
   sending = true;
@@ -258,6 +272,7 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
       encrypted: false,
       acknowledge_risk: acknowledgeRisk,
       acknowledge_unsupported: acknowledgeUnsupported,
+      user_approved: userApproved,
     });
     // 관리 토큰은 이 응답에만 온다 — 바로 보관
     saveToken(created.id, created.manage_token);

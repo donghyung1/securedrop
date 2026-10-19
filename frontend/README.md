@@ -1,7 +1,8 @@
 # SecureDrop Cloud Frontend (C)
 
 PRD v1.3 웹 UI입니다. Vanilla JS(ES modules), 빌드 없음, 외부 스크립트 없음(CloudFront CSP `script-src 'self'` 대응).
-`backend/frontend/`는 A의 v1.2 백엔드 테스트 화면이고, 이 폴더가 데모용 화면입니다.
+`backend/frontend/`는 A의 v1.2 백엔드 테스트 화면이며 v1.3 API와 맞지 않습니다. 데모 화면은 이 폴더입니다.
+
 
 ## 실행
 
@@ -32,18 +33,17 @@ cd frontend && python3 -m http.server 5500
 | `js/assist.js` | SecureGuard 패널 (규칙 기반 문구 + 조치 버튼) |
 | `js/main.js`, `js/ui.js` | 진입점, 토스트·공통 도우미 |
 
-## 백엔드와 맞춰야 할 것
+## 백엔드 계약 메모
 
-- `/api/sanitize`의 `actions` 형식: `[{"action":"MASK","targets":["RRN"]}]` (A의 v1.2 형식 유지 가정)
-- 확인 플래그 누락 시 응답: 422 `VALIDATION_ERROR` 가정
-- 4MB 초과 .txt/.csv: 서버도 검사할 수 없으므로 `acknowledge_unsupported`로 전송
-- 업로드 허용 확장자: A의 v1.2 목록 유지 가정
-- `GET /api/d/{id}` 응답에 `expires_at` 포함 가정 (없으면 카운트다운만 숨김)
-- S3 버킷 CORS에 `http://localhost:5500` 포함 (PRD §10.2)
+`backend/README.md`(A, v1.3)의 "웹 파일 전송 계약"을 따릅니다. 화면 동작에 영향이 큰 규칙:
+
+- .txt/.csv는 검사(`scan_id`) 또는 정제(`sanitize_id`) 참조가 있어야만 전송됩니다. 그래서 4MB를 넘는 .txt/.csv는 보낼 수 없다고 안내합니다.
+- 그 외 형식은 `acknowledge_unsupported`, 민감정보가 남은 파일은 `acknowledge_risk`(없으면 409 `SENSITIVE_REMAINS`), 처리본은 `user_approved`가 필요합니다.
+- 로컬 실행 시 백엔드 `.env`의 `ALLOWED_ORIGINS`에 `http://localhost:5500`, `PUBLIC_BASE_URL`은 `http://localhost:5500`으로 두면 QR이 이 폴더의 `d.html`을 가리킵니다. S3 버킷 CORS에도 `http://localhost:5500`이 있어야 합니다.
 
 ## 진행 상황
 
-- [x] STEP 1~2: 선택 즉시 검사, 민감정보 원본 보류, 검사 불가 형식·4MB 초과 확인
+- [x] STEP 1~2: 선택 즉시 검사, 민감정보 원본 보류, 검사 미지원 형식 확인, 4MB 초과 .txt/.csv 차단
 - [x] 3단계 업로드(SHA-256, Presigned POST, 진행률), 관리 토큰, QR, 상태 조회, 폐기
 - [x] `d.html` 휴대폰 다운로드 (만료 410·폐기 404 화면)
 - [ ] 여정 3~4: SecureGuard 조치 → `/api/sanitize` → 미리보기 승인 → 처리본 전송 (Day 3)
