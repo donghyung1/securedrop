@@ -257,10 +257,12 @@ const mockApi = {
       for (const type of targets) {
         const re = MOCK_PATTERNS[type];
         if (!re) continue;
+        // 서버 sanitizer.py와 같은 형식
         out = out.replace(re, (m) => {
           if (action === "DELETE") return "";
-          if (type === "RRN") return m.slice(0, 8) + "******";
-          if (type === "PHONE") return m.replace(/^(\d{3}-?)\d{3,4}(-?\d{4})$/, "$1****$2");
+          const digits = m.replace(/\D/g, "");
+          if (type === "RRN") return `${digits.slice(0, 6)}-${digits[6]}******`;
+          if (type === "PHONE") return `${digits.slice(0, 3)}-****-${digits.slice(-4)}`;
           return "[REDACTED]";
         });
       }
