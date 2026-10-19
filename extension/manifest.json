@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "SecureDrop Guard",
+  "version": "1.2.0",
+  "description": "AI 챗봇에 개인정보·기밀을 전송하기 전에 SecureDrop 서버로 검사하고, 감지되면 전송을 차단합니다.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://claude.ai/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "SecureDrop Guard", "default_popup": "popup.html" }
+}
