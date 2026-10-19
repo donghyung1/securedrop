@@ -43,18 +43,18 @@ function sendButton() {
   return site ? document.querySelector(site.send) : null;
 }
 
-async function serverUrl() {
+async function webBase() {
   try {
-    const { serverUrl } = await chrome.storage.sync.get({ serverUrl: "http://localhost:8000" });
-    return String(serverUrl).replace(/\/+$/, "");
+    const { webBase } = await chrome.storage.sync.get({ webBase: SD_CONFIG.webBase });
+    return String(webBase || SD_CONFIG.webBase).replace(/\/+$/, "");
   } catch {
-    return "http://localhost:8000";
+    return SD_CONFIG.webBase;
   }
 }
 
 async function failClosed() {
   try {
-    return (await chrome.storage.sync.get({ failClosed: true })).failClosed !== false;
+    return (await chrome.storage.sync.get({ failClosed: SD_CONFIG.failClosed })).failClosed !== false;
   } catch {
     return true;
   }
@@ -108,7 +108,7 @@ async function showPopup({ title, body, types = [], safeLink = true }) {
     const link = document.createElement("a");
     link.className = "primary";
     link.textContent = "안전하게 전송하기";
-    link.href = (await serverUrl()) + "/";
+    link.href = (await webBase()) + "/";
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     row.append(link);
