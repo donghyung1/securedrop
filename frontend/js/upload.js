@@ -3,7 +3,7 @@
 // 정제(여정 3·4)는 Day 3에 assist.js + api.sanitize로 연결한다. sendBlob()은 처리본 전송에도 그대로 쓴다.
 import { api, CONFIG, ApiError, typeLabel, extOf, mimeOf, sha256Hex } from "./api.js";
 import * as guard from "./assist.js";
-import { saveToken } from "./manage.js";
+import { saveToken, removeToken } from "./manage.js";
 import { showTransfer, hideTransfer } from "./qr.js";
 import { toast, fmtSize } from "./ui.js";
 
@@ -257,6 +257,8 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
   sending = true;
   updateSendButton();
   $("btn-reset").disabled = true;
+  let stage = "hash";   // hash → create → upload → complete (오류 해석에 사용)
+  let created = null;
   try {
     setProgress("파일 확인 중…", 0);
     const sha256 = await sha256Hex(blob);
@@ -264,8 +266,9 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
       throw new ApiError("VALIDATION_ERROR", "검사 후 파일이 바뀌었습니다. 파일을 다시 선택하세요.");
     }
 
+    stage = "create";
     setProgress("업로드 준비 중…", 0);
-    const created = await api.createTransfer({
+    created = await api.createTransfer({
       files: [{ name, size: blob.size, type, sha256 }],
       ...ref,
       expires_in: Number($("expires").value),
@@ -277,10 +280,19 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
     // 관리 토큰은 이 응답에만 온다 — 바로 보관
     saveToken(created.id, created.manage_token);
 
+    stage = "upload";
     await api.uploadToS3(created.uploads[0], blob, (r) => setProgress(`업로드 중… ${Math.round(r * 100)}%`, r));
 
+    stage = "complete";
     setProgress("업로드 확인 중…", 1);
-    const done = await api.completeTransfer(created.id, created.manage_token);
+    let done;
+    try {
+      done = await api.completeTransfer(created.id, created.manage_token);
+    } catch (e) {
+      // /complete는 재시도해도 안전하다 (이미 ACTIVE면 같은 링크를 돌려준다)
+      if (!(e instanceof ApiError) || e.code !== "NETWORK_ERROR") throw e;
+      done = await api.completeTransfer(created.id, created.manage_token);
+    }
     saveToken(created.id, created.manage_token, done.expires_at);
 
     setProgress(null);
@@ -293,10 +305,14 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
     setProgress(null);
     errBox.textContent = err.userMessage;
     errBox.hidden = false;
-    if (err.code === "EXPIRED" && state.file && state.scanResult) {
+    // 업로드 단계 이후 실패한 전송은 쓸 수 없다 (서버가 폐기했거나 업로드 권한이 끝남) → 토큰 정리
+    if (created && stage !== "create") removeToken(created.id);
+    if (err.code === "EXPIRED" && stage === "create" && state.file && state.scanResult) {
       // 검사 세션(10분)이 만료됨 → 다시 검사하고 사용자가 다시 누르게 한다
       errBox.textContent = "검사 결과가 만료되어 다시 검사했습니다. 다시 전송하세요.";
       runScan(state.file);
+    } else if (err.code === "EXPIRED" && stage === "complete") {
+      errBox.textContent = "업로드 유효 시간(5분)이 지났습니다. 다시 전송하세요.";
     }
   } finally {
     sending = false;

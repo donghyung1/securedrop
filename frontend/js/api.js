@@ -336,8 +336,8 @@ const mockApi = {
       manage_hash: await sha256Hex(new Blob([token])),
       status: "PENDING_UPLOAD",
       files: [{ name: f.name, size: f.size, sha256: f.sha256, s3_key: key }],
-      expires_in,
-      expires_at: null,
+      expires_at: new Date(Date.now() + expires_in * 1000).toISOString(), // 생성 시점부터 계산
+      upload_expires_at: Date.now() + 300e3,
       download_count: 0,
     };
     mockSave(all);
@@ -347,6 +347,7 @@ const mockApi = {
       status: "PENDING_UPLOAD",
       uploads: [{ url: "mock://s3", fields: { key, "Content-Type": f.type } }],
       upload_expires_in: 300,
+      expires_at: all[id].expires_at,
     };
   },
 
@@ -373,18 +374,27 @@ const mockApi = {
     const t = all[id];
     if (!t) throw new ApiError("NOT_FOUND", null, 404);
     await mockCheckToken(t, token);
+    if (t.status === "REVOKED") throw new ApiError("NOT_FOUND", null, 404);
+    if (Date.parse(t.expires_at) <= Date.now()) throw new ApiError("EXPIRED", "만료된 전송입니다.", 410);
     const f = t.files[0];
+    const shareUrl = new URL(`d.html?id=${id}`, location.href).href;
+    if (t.status === "ACTIVE") {
+      // 재시도: 같은 링크를 돌려준다
+      return { id, status: "ACTIVE", share_url: shareUrl, qr: mockQr(shareUrl), expires_at: t.expires_at };
+    }
+    if (t.upload_expires_at <= Date.now()) throw new ApiError("EXPIRED", "업로드 유효 시간이 지났습니다.", 410);
     const obj = mockS3.get(f.s3_key);
     if (!obj || obj.size !== f.size) throw new ApiError("UPLOAD_INCOMPLETE", null, 409);
     if (obj.sha256 !== f.sha256) {
+      // 서버는 해시 불일치 시 전송을 폐기하고 객체를 지운다
       mockS3.delete(f.s3_key);
+      t.status = "REVOKED";
+      mockSave(all);
       throw new ApiError("INTEGRITY_MISMATCH", null, 409);
     }
     t.status = "ACTIVE";
-    t.expires_at = new Date(Date.now() + t.expires_in * 1000).toISOString();
     f.dataUrl = obj.dataUrl;
     mockSave(all);
-    const shareUrl = new URL(`d.html?id=${id}`, location.href).href;
     return { id, status: "ACTIVE", share_url: shareUrl, qr: mockQr(shareUrl), expires_at: t.expires_at };
   },
 
@@ -401,8 +411,9 @@ const mockApi = {
     await delay(200);
     const all = mockLoad();
     const t = all[id];
-    if (!t || t.status === "REVOKED") throw new ApiError("NOT_FOUND", null, 404);
+    if (!t) throw new ApiError("NOT_FOUND", null, 404);
     await mockCheckToken(t, token);
+    // 서버처럼 이미 폐기된 전송도 재시도 허용
     t.status = "REVOKED";
     delete t.files[0].dataUrl;
     mockS3.delete(t.files[0].s3_key);
