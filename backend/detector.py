@@ -34,7 +34,8 @@ def valid_rrn(value: str) -> bool:
 
 def valid_card(value: str) -> bool:
     digits = re.sub(r"\D", "", value)
-    if not 13 <= len(digits) <= 19 or len(set(digits)) == 1:
+    # 13자리는 주민등록번호(13자리)와 겹쳐 우연한 Luhn 통과 오탐이 많고, 13자리 카드는 사실상 쓰이지 않는다.
+    if not 14 <= len(digits) <= 19 or len(set(digits)) == 1:
         return False
     total = 0
     for index, digit in enumerate(reversed(digits)):
