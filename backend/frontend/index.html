@@ -38,7 +38,8 @@
     </div>
     <p id="status" role="status" aria-live="polite"></p>
     <section id="transfer" hidden><p class="eyebrow">03 / READY TO SHARE</p><h2>다운로드 링크가 준비되었습니다.</h2>
-      <div class="share"><img id="qr" alt="다운로드 링크 QR 코드" width="180" height="180"><div><p id="expires"></p>
+      <div class="share"><div class="qr-panel"><img id="qr" alt="다운로드 링크 QR 코드" width="180" height="180">
+        <p><a id="save-qr" download="securedrop-qr.png">QR 이미지 저장</a></p></div><div><p id="expires"></p>
         <a id="download" target="_blank" rel="noopener noreferrer">다운로드 열기</a>
         <div class="actions"><button id="copy" type="button">링크 복사</button><button id="revoke" class="danger" type="button">전송 폐기</button></div><p id="transfer-status" role="status"></p></div></div>
     </section>

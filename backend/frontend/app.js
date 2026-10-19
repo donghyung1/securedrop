@@ -72,7 +72,9 @@ async function send(confirmSensitive = false) {
   $("preview").textContent = "";
   clearSensitive();
   $("qr").src = transfer.qr;
-  $("download").href = transfer.url;
+  $("save-qr").href = transfer.qr;
+  $("save-qr").hidden = false;
+  $("download").href = transfer.download_url;
   $("download").hidden = false;
   $("qr").hidden = false;
   $("copy").hidden = false;
@@ -153,13 +155,14 @@ $("send-draft").onclick = () => run(() => send());
 $("cancel").onclick = () => run(async () => { await discard(); clearSensitive(); $("status").textContent = "처리본을 폐기했습니다."; });
 $("risk").onchange = sync;
 $("approve").onchange = sync;
-$("copy").onclick = () => run(async () => { await navigator.clipboard.writeText(transfer.url); $("status").textContent = "다운로드 링크를 복사했습니다."; });
+$("copy").onclick = () => run(async () => { await navigator.clipboard.writeText(transfer.download_url); $("status").textContent = "다운로드 링크를 복사했습니다."; });
 $("revoke").onclick = () => run(async () => {
   await api(`/api/transfers/${transfer.id}`, { method: "DELETE" });
   transfer = null;
   $("download").removeAttribute("href");
   $("qr").removeAttribute("src");
-  for (const id of ["download", "qr", "copy", "revoke"]) $(id).hidden = true;
+  $("save-qr").removeAttribute("href");
+  for (const id of ["download", "qr", "save-qr", "copy", "revoke"]) $(id).hidden = true;
   $("transfer-status").textContent = "전송이 폐기되었습니다.";
   $("status").textContent = "파일을 다시 선택하여 새 링크를 만들 수 있습니다.";
 });

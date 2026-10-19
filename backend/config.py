@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     aws_region: str = "ap-northeast-2"
     aws_profile: str | None = None
     s3_bucket: str = ""
+    public_base_url: AnyHttpUrl | None = None
     max_file_mb: int = Field(default=20, ge=1, le=20)
     scan_file_max_mb: int = Field(default=5, ge=1, le=5)
     default_expires_sec: int = 600
@@ -33,4 +34,12 @@ class Settings(BaseSettings):
             raise ValueError("Default expiry exceeds maximum")
         if "*" in self.allowed_origins:
             raise ValueError("Explicit CORS origins are required")
+        if self.public_base_url and (
+            self.public_base_url.path not in (None, "/")
+            or self.public_base_url.query
+            or self.public_base_url.fragment
+            or self.public_base_url.username
+            or self.public_base_url.password
+        ):
+            raise ValueError("PUBLIC_BASE_URL must be an HTTP(S) origin without credentials")
         return self

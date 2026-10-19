@@ -93,7 +93,11 @@ Invoke-RestMethod http://localhost:8000/api/scan -Method Post `
 
 ## 전송 결과 및 오류
 
-응답의 `url`은 S3 다운로드 Presigned URL이며 `qr`은 해당 URL을 인코딩한 PNG data URI입니다. 전송 상태 조회에서는 링크를 다시 발급하지 않습니다. S3 직접 다운로드를 추적하지 않으므로 `downloaded`는 항상 false이며 다운로드 여부 판단에 사용하면 안 됩니다. 만료 시 상태 조회는 410, 폐기·미존재는 404입니다. 만료 후에도 DELETE로 객체를 정리할 수 있습니다.
+응답의 `url`은 기존 호환용 S3 다운로드 Presigned URL이며, `download_url`은 `https://서비스주소/d/랜덤ID` 형식의 짧은 공유 주소입니다. `qr`은 이 짧은 주소를 담은 180×180 PNG data URI입니다. 웹의 다운로드 열기·링크 복사도 짧은 주소를 사용합니다. 원래 파일명은 S3 객체의 Content-Disposition 응답 헤더로 유지합니다.
+
+짧은 주소는 인증 헤더 없이 사용할 수 있는 소지자 접근 링크입니다. 서버는 접속 시 DB의 만료·폐기 여부를 확인하고, 원래 만료 시각까지 남은 초만 유효한 S3 Presigned URL로 302 이동합니다. 새 요청으로 전송 수명이 연장되지 않으며, 만료는 410, 폐기·미존재는 404입니다. 응답은 캐시하지 않고 리퍼러를 전달하지 않습니다. DB에는 전체 URL이나 파일명을 추가로 저장하지 않으며 서버 재시작 뒤에도 링크가 동작합니다. 만료 후에도 DELETE로 객체를 정리할 수 있습니다. 다운로드 여부를 추적하지 않으므로 `downloaded`는 항상 false입니다.
+
+CloudFront·리버스 프록시 환경에서는 `PUBLIC_BASE_URL=https://공개서비스주소`를 설정하세요. 설정이 없으면 요청의 기본 주소를 사용합니다. 로컬의 localhost 주소는 휴대폰에서 접근할 수 없으므로 휴대폰 테스트에는 접근 가능한 서버 주소가 필요합니다. 배포·도메인 연결 스크립트는 공개 주소를 자동 설정합니다.
 
 검증 오류는 422, 인증 실패는 401, 승인 누락은 403, 용량 초과는 413, 정제 미지원 형식은 415 `UNSUPPORTED_TYPE`, 민감정보 확인 필요는 409, 호출 제한은 429, S3 오류는 502입니다. 공통 형식은 `{"error":{"code":"...","message":"..."}}`이며 검증 오류에 원문을 포함하지 않습니다. 외부 차단 로그는 BLOCK만 허용하며 정제(SANITIZE)·전송·폐기 이벤트는 서버에서 생성합니다.
 
@@ -112,6 +116,26 @@ uv run python deploy/verify_live.py
 ```
 
 프로비저닝 스크립트는 지정 버킷의 보안·수명 주기 정책과 `securedrop-cloud-backend` Role의 전용 inline policy를 설정합니다. 이 프로젝트 전용 리소스에만 사용하세요. EC2 인스턴스나 HTTPS 서버는 생성하지 않습니다. 리소스 정보와 적용한 정책은 Git에서 제외되는 로컬 `deploy/aws/`에 기록합니다. 공개용 `deploy/aws-examples/`는 가상 계정 ID와 버킷명을 사용하는 형식 예시입니다. 실제 S3 검증은 작은 파일을 업로드하고 서명 URL 다운로드·익명 접근 차단·암호화·폐기 후 접근 차단을 확인한 뒤 객체를 삭제합니다. 해당 테스트는 실제 AWS API를 호출합니다.
+
+### EC2 및 HTTPS 데모 배포
+
+위 S3/IAM 프로비저닝 후 프로젝트의 `backend` 디렉터리에서 실행합니다.
+
+```powershell
+uv run python deploy/deploy-aws.py
+# 배포 후 HTTPS 경로만 다시 검증
+uv run python deploy/verify_https.py
+# 기존 배포에 보유 도메인 연결 (해당 공개 호스팅 영역 사용)
+uv run python deploy/connect-domain.py --domain securedrop.example.com --hosted-zone-id YOUR_HOSTED_ZONE_ID
+```
+
+AWS CLI로 전용 VPC·서브넷·인터넷 게이트웨이, t3.micro EC2, 암호화된 12 GiB gp3 볼륨, 고정 IPv4와 CloudFront를 생성합니다. EC2·EBS·IPv4·CloudFront 사용 요금이 발생합니다. 리소스 ID, HTTPS 주소, origin 검증 비밀값은 Git에서 제외된 `deploy/aws/deployment.json`에 저장합니다. 이 파일을 유지해야 재실행 시 기존 리소스를 사용합니다. 재배포는 앱을 잠시 중단하여 코드와 잠긴 의존성을 갱신하며 SQLite와 API Key를 유지합니다. `user-data.sh`의 서버 설정은 최초 생성 시 적용됩니다.
+
+도메인 연결 스크립트는 us-east-1의 ACM 인증서를 DNS로 검증하고 CloudFront 대체 도메인과 인증서, Route 53 A/AAAA Alias, 앱 허용 출처를 설정합니다. 인증서 발급과 CloudFront 반영을 기다린 뒤 실제 도메인으로 전송 흐름을 검증하며, 이후 재배포에도 해당 도메인을 유지합니다.
+
+EC2는 SSH 인바운드를 열지 않고 IAM Role과 SSM으로 관리합니다. Nginx는 CloudFront 출발지와 배포 전용 헤더를 확인하고 Uvicorn은 localhost에서 worker 1개로 실행합니다. 브라우저와 CloudFront 사이에는 HTTPS를 사용하며 CloudFront와 EC2 사이는 HTTP입니다. 기밀 파일을 운영 환경에서 처리하기 전에는 origin 구간 TLS 또는 비공개 VPC origin과 사용자 인증을 추가하세요. 현재 웹 인증 범위는 위의 로그인 없는 데모와 같습니다.
+
+스크립트는 서버 설정 완료와 CloudFront 배포를 기다리고 HTTPS 화면·헬스·민감정보 탐지·S3 업로드·서명 다운로드·익명 다운로드 차단·전송 폐기를 검증합니다. 검증 객체와 배포용 S3 아카이브는 성공 후 삭제합니다. 서버 API Key는 EC2의 `/opt/securedrop/.env`에 생성되며 로컬 개발용 키와 별개입니다. SQLite는 `/var/lib/securedrop/securedrop.db`에 저장되며 인스턴스 종료 시 EBS도 삭제되는 데모 구성입니다.
 
 - 서울 리전의 비공개 S3 버킷을 준비하고 Block Public Access 전체 활성화, 기본 SSE-S3 암호화, 생성 1일 뒤 만료하는 수명 주기를 설정하세요. 앱은 업로드마다 `AES256` 암호화를 명시합니다.
 - IAM Role은 `arn:aws:s3:::버킷이름/transfers/*`에 대한 `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`만 필요합니다. 앱에 AWS 키를 넣지 않습니다. SDK 기본 자격 증명 체인과 CLI profile/IAM Role을 사용합니다.

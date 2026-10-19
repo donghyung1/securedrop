@@ -27,7 +27,8 @@ button.danger { background: #fff0ed; color: #9e3b2a; border-color: #f0c8be; }
 .warning, .error { color: #aa4024; }
 pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f2f6f5; padding: 16px; border-radius: 8px; }
 .share { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
-.share img { object-fit: contain; }
+.qr-panel { width: 180px; }
+.qr-panel img { display: block; image-rendering: pixelated; background: white; }
 a { color: #176856; }
 details { border-top: 1px solid #d5e1dc; padding: 20px 0; }
 summary { cursor: pointer; font-size: .9rem; }

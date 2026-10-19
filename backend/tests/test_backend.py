@@ -5,9 +5,11 @@ from dataclasses import replace
 from datetime import timedelta
 from io import BytesIO
 from threading import Event
+from urllib.parse import parse_qs, quote, urlsplit
 
 import boto3
 import pytest
+import zxingcpp
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from moto import mock_aws
@@ -250,11 +252,16 @@ def test_transfer_s3_qr_and_revoke(env):
     assert item["url"].startswith("https://securedrop-test.s3.ap-northeast-2.amazonaws.com/")
     image = Image.open(BytesIO(base64.b64decode(item["qr"].split(",", 1)[1])))
     assert image.format == "PNG"
+    assert image.size == (180, 180)
+    assert zxingcpp.read_barcode(image).text == item["download_url"]
+    assert item["download_url"] == f"http://testserver/d/{item['id']}"
     identifier = item["id"]
     key = app.state.store.transfer(identifier)["object_key"]
     obj = s3.get_object(Bucket="securedrop-test", Key=key)
     assert obj["Body"].read() == b"hello"
     assert obj["ServerSideEncryption"] == "AES256"
+    assert obj["ContentType"] == "application/octet-stream"
+    assert obj["ContentDisposition"] == "attachment; filename*=UTF-8''sample.txt"
     assert client.get(f"/api/transfers/{identifier}", headers=ORIGIN).json()["status"] == "active"
     assert client.delete(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 200
     assert client.get(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 404
@@ -264,6 +271,93 @@ def test_transfer_s3_qr_and_revoke(env):
     assert [row["event"] for row in logs] == ["REVOKE", "TRANSFER"]
     assert all(set(row) == {"time", "event", "types", "source"} for row in logs)
     assert "sample.txt" not in str(logs) and item["url"] not in str(logs)
+
+
+@pytest.mark.parametrize("filename", ["sample.txt", "한글 파일명 " * 15 + ".txt"])
+def test_short_qr_with_long_presigned_url_and_session_credentials(env, monkeypatch, filename):
+    client, app, s3 = env
+    # EC2 role credentials add a long, URL-escaped security token to the QR payload.
+    token = base64.b64encode(bytes(range(256)) * 3).decode("ascii")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", token)
+    response = upload(client, filename=filename)
+    assert response.status_code == 200, response.text
+    item = response.json()
+    assert "X-Amz-Security-Token=" in item["url"]
+    assert len(item["url"]) > 1400
+    image = Image.open(BytesIO(base64.b64decode(item["qr"].split(",", 1)[1])))
+    decoded = zxingcpp.read_barcode(image)
+    assert decoded is not None
+    assert decoded.text == item["download_url"]
+    assert image.size == (180, 180)
+    assert len(decoded.text) < 80
+    assert "response-content-disposition" not in item["url"]
+    key = app.state.store.transfer(item["id"])["object_key"]
+    obj = s3.get_object(Bucket="securedrop-test", Key=key)
+    assert obj["ContentDisposition"] == f"attachment; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def test_short_download_redirect_preserves_deadline_and_survives_restart(env, monkeypatch):
+    client, app, _ = env
+    item = upload(client, data={"expires_in": "300"}).json()
+    # Short URLs resolve from persisted transfer metadata, without storing S3 URLs.
+    settings = app.state.settings
+    with TestClient(create_app(settings)) as restarted:
+        response = restarted.get(item["download_url"], follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    location = response.headers["location"]
+    assert location.startswith("https://securedrop-test.s3.ap-northeast-2.amazonaws.com/")
+    assert "X-Amz-Signature=" in location
+    assert 0 < int(parse_qs(urlsplit(location).query)["X-Amz-Expires"][0]) <= 300
+    # A later scan can never reset the original transfer lifetime.
+    instant = now()
+    monkeypatch.setattr("main.now", lambda: instant)
+    with app.state.store.connect() as conn:
+        conn.execute(
+            "UPDATE transfers SET expires_at=? WHERE id=?",
+            ((instant + timedelta(seconds=12)).isoformat(), item["id"]),
+        )
+    response = client.get(item["download_url"], follow_redirects=False)
+    assert response.status_code == 302
+    query = parse_qs(urlsplit(response.headers["location"]).query)
+    assert query["X-Amz-Expires"] == ["12"]
+
+
+def test_short_download_rejects_expired_revoked_and_unknown_links(env, monkeypatch):
+    client, app, _ = env
+    item = upload(client).json()
+    instant = now()
+    monkeypatch.setattr("main.now", lambda: instant)
+    with app.state.store.connect() as conn:
+        conn.execute(
+            "UPDATE transfers SET expires_at=? WHERE id=?", (instant.isoformat(), item["id"])
+        )
+    response = client.get(item["download_url"], follow_redirects=False)
+    assert response.status_code == 410
+    assert "location" not in response.headers
+    assert client.delete(f"/api/transfers/{item['id']}", headers=ORIGIN).status_code == 200
+    assert client.get(item["download_url"], follow_redirects=False).status_code == 404
+    assert client.get("/d/unknown", follow_redirects=False).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "public_base",
+    [
+        "https://securedrop.ldh.mzsec.cloud",
+        "https://d1234567890123.cloudfront.net/",
+    ],
+)
+def test_short_qr_uses_configured_public_origin(env, public_base):
+    _, app, _ = env
+    settings = app.state.settings.model_dump()
+    settings["public_base_url"] = public_base
+    with TestClient(create_app(Settings(_env_file=None, **settings))) as client:
+        item = upload(client).json()
+    assert item["download_url"] == public_base.rstrip("/") + "/d/" + item["id"]
+    image = Image.open(BytesIO(base64.b64decode(item["qr"].split(",", 1)[1])))
+    assert image.size == (180, 180)
+    assert zxingcpp.read_barcode(image).text == item["download_url"]
 
 
 def test_text_confirmation_and_full_scan(env):

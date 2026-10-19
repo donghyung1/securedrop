@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -112,6 +112,7 @@ class FileScanResult(ScanResult):
 class TransferResult(BaseModel):
     id: str
     url: str
+    download_url: str
     qr: str
     expires_at: str
 
@@ -524,7 +525,11 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
             expires_at = (now() + timedelta(seconds=expires)).isoformat()
             url = await run_in_threadpool(storage.create, key, content, filename, expires)
             try:
-                qr = await run_in_threadpool(qr_data, url)
+                if settings.public_base_url:
+                    download_url = f"{str(settings.public_base_url).rstrip('/')}/d/{identifier}"
+                else:
+                    download_url = str(request.url_for("download_transfer", identifier=identifier))
+                qr = await run_in_threadpool(qr_data, download_url)
                 await run_in_threadpool(
                     store.save_transfer, identifier, key, expires_at, findings, request.state.source
                 )
@@ -532,7 +537,13 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
                 await run_in_threadpool(storage.delete, key)
                 raise
             success = True
-            return {"id": identifier, "url": url, "qr": qr, "expires_at": expires_at}
+            return {
+                "id": identifier,
+                "url": url,
+                "download_url": download_url,
+                "qr": qr,
+                "expires_at": expires_at,
+            }
         finally:
             if checked_out:
                 drafts.finish(sanitize_id, success)
@@ -544,6 +555,16 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
         if row is None or row["revoked"]:
             raise APIError(404, "NOT_FOUND", "전송을 찾을 수 없습니다.")
         return row
+
+    @app.get("/d/{identifier}", include_in_schema=False)
+    def download_transfer(identifier: str):
+        # The random 128-bit ID is a bearer capability, like the S3 URL itself.
+        row = get_transfer(identifier)
+        remaining = int((datetime.fromisoformat(row["expires_at"]) - now()).total_seconds())
+        if remaining <= 0:
+            raise APIError(410, "EXPIRED", "만료된 전송입니다.")
+        url = storage.download_url(row["object_key"], remaining)
+        return RedirectResponse(url, status_code=302, headers={"Referrer-Policy": "no-referrer"})
 
     @app.get("/api/transfers/{identifier}", dependencies=[auth])
     def transfer_status(identifier: str):
