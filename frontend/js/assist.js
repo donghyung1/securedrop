@@ -53,18 +53,56 @@ export function showFindings(filename, findings) {
   const summary = findings.map((f) => `${typeLabel(f.type)} ${f.count}건`).join(", ");
   say(`선택한 ${filename}에서 민감정보가 발견됐습니다. ${summary}. 원본 파일의 전송이 보류되었습니다.`, "danger");
   say("어떻게 처리할까요? 원본은 변경하지 않고 별도 처리본을 만든 뒤 다시 검사합니다.");
-  const main = findings[0] ? typeLabel(findings[0].type) : "민감정보";
-  setButtons([
-    { label: `${findings.length > 1 ? "민감정보" : main} 마스킹`, action: "MASK", variant: "primary" },
-    { label: "해당 항목 삭제", action: "DELETE" },
-    { label: "전송 취소", action: "CANCEL" },
-  ]);
+  setButtons(findingButtons(findings));
 }
 
-export function showDeferred(filename, reason) {
-  clear();
-  say(`${filename}: ${reason} 민감정보가 발견되면 전송을 보류하고 다시 안내해 드립니다.`, "warn");
-  setButtons([]);
+// PRD 예시: [ 주민등록번호 마스킹 ] [ 해당 항목 삭제 ] [ 전송 취소 ]
+function findingButtons(findings) {
+  const main = findings.length === 1 ? typeLabel(findings[0].type) : "전체";
+  return [
+    { label: `${main} 마스킹`, action: "MASK", variant: "primary" },
+    { label: "해당 항목 삭제", action: "DELETE" },
+    { label: "전송 취소", action: "CANCEL" },
+  ];
+}
+
+const joinTypes = (types) => types.map(typeLabel).join(", ");
+
+// 받침에 따라 조사 선택 (한글이 아니면 병기)
+function josa(word, withBatchim, without) {
+  const code = word.charCodeAt(word.length - 1);
+  if (code < 0xac00 || code > 0xd7a3) return `${withBatchim}(${without})`;
+  return (code - 0xac00) % 28 ? withBatchim : without;
+}
+
+export function showSelecting(preset) {
+  say(
+    preset === "DELETE"
+      ? "탐지된 항목을 삭제한 처리본을 만들겠습니다. 유형별로 조치를 바꿀 수 있습니다."
+      : "탐지된 항목을 마스킹한 처리본을 만들겠습니다. 유형별로 조치를 바꿀 수 있습니다.",
+  );
+  setButtons([{ label: "전송 취소", action: "CANCEL" }]);
+}
+
+// actions: [{action, targets}], res: /api/sanitize 응답
+export function showSanitized(actions, res) {
+  const done = actions
+    .map(({ action, targets }) => {
+      const names = joinTypes(targets);
+      return `${names}${josa(names, "을", "를")} ${action === "MASK" ? "마스킹" : "삭제"}`;
+    })
+    .join("하고 ");
+  if (res.clean) {
+    say(`${done}했습니다. 다시 검사한 결과 남은 민감정보가 없습니다. 미리보기를 확인한 뒤 승인하면 전송합니다.`, "ok");
+    setButtons([{ label: "전송 취소", action: "CANCEL" }]);
+  } else {
+    const left = res.findings_after.map((f) => `${typeLabel(f.type)} ${f.count}건`).join(", ");
+    say(`${done}했습니다. 다시 검사했더니 ${left}이 남아 있습니다. 추가로 정제하거나, 위험을 확인한 뒤 보낼 수 있습니다.`, "warn");
+    setButtons([
+      { label: "남은 항목도 정제", action: "MORE", variant: "primary" },
+      { label: "전송 취소", action: "CANCEL" },
+    ]);
+  }
 }
 
 export function showSent(filename) {

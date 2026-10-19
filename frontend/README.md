@@ -31,6 +31,7 @@ cd frontend && python3 -m http.server 5500
 | `js/manage.js` | 관리 토큰 보관 (sessionStorage), `X-Manage-Token` |
 | `js/qr.js` | QR, 만료 카운트다운, 다운로드 수, 링크 복사·폐기 |
 | `js/download.js` | 다운로드 페이지 로직 |
+| `js/sanitize.js` | 정제 방법 선택, `/api/sanitize` 호출, 재검사 결과·미리보기 |
 | `js/assist.js` | SecureGuard 패널 (규칙 기반 문구 + 조치 버튼) |
 | `js/crypto.js` | (B) 브라우저 암호화 F12 — AES-256-GCM 암호화·복호화, 키는 링크 `#k=`에만 |
 | `js/qrcode.js` | (B) 브라우저 QR 생성기 — 키가 든 링크는 서버가 QR을 못 만들어 브라우저에서 그린다 |
@@ -49,7 +50,7 @@ cd frontend && python3 -m http.server 5500
 - [x] STEP 1~2: 선택 즉시 검사, 민감정보 원본 보류, 검사 미지원 형식 확인, 4MB 초과 .txt/.csv 차단
 - [x] 3단계 업로드(SHA-256, Presigned POST, 진행률), 관리 토큰, QR, 상태 조회, 폐기
 - [x] `d.html` 휴대폰 다운로드 (만료 410·폐기 404 화면)
-- [ ] 여정 3~4: SecureGuard 조치 → `/api/sanitize` → 미리보기 승인 → 처리본 전송 (Day 3)
+- [x] 여정 3~4: SecureGuard 버튼·유형별 조치(마스킹/삭제/그대로) → `/api/sanitize` → 재검사·상위 20행 미리보기 → 승인 후 처리본 전송(`sanitize_id`, `user_approved`). 남은 민감정보는 추가 정제 또는 `acknowledge_risk`
 - [ ] 자연어 요청 `/api/assist`, 플러그인 도구 (Day 4)
 - [ ] 선택: 내 전송 목록(F11), 다중 파일(F10), 브라우저 E2EE(F12)
 

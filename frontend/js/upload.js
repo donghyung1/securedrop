@@ -1,8 +1,9 @@
 // 업로드 화면 (PRD v1.3 §4 여정 1·2·6·7)
 // STEP 1 파일 선택 → STEP 2 /api/scan/file 즉시 검사 → 전송: 해시 → /api/transfers → S3 직접 업로드 → /complete → QR
-// 정제(여정 3·4)는 Day 3에 assist.js + api.sanitize로 연결한다. sendBlob()은 처리본 전송에도 그대로 쓴다.
-import { api, CONFIG, ApiError, typeLabel, extOf, mimeOf, sha256Hex } from "./api.js";
+// 민감정보가 있으면 정제(여정 3·4): 조치 선택 → /api/sanitize → 미리보기 승인 → 처리본을 같은 sendBlob()으로 전송
+import { api, CONFIG, ApiError, typeLabel, extOf, mimeOf, sha256Hex, base64ToBlob } from "./api.js";
 import * as guard from "./assist.js";
+import * as sanitize from "./sanitize.js";
 import { saveToken, removeToken } from "./manage.js";
 import { showTransfer, hideTransfer } from "./qr.js";
 import { generateKey, encryptBlob, withKey, OVERHEAD } from "./crypto.js";
@@ -15,7 +16,8 @@ const MB = 1024 * 1024;
 // scan: "idle" | "scanning" | "clean" | "blocked" | "unscannable" | "rejected" | "error"
 //   unscannable: .txt/.csv 외 형식 → 사용자 확인 후 acknowledge_unsupported 로 전송
 //   rejected:    4MB 초과 .txt/.csv → 검사할 수 없고, 서버는 검사 참조 없는 .txt/.csv를 받지 않으므로 전송 불가
-let state = { file: null, scan: "idle", scanResult: null, reason: "" };
+// mode: "original" (원본 전송) | "select" (정제 방법 선택 중) | "preview" (처리본 미리보기, 승인 대기)
+let state = { file: null, scan: "idle", scanResult: null, reason: "", mode: "original", sanitized: null };
 let scanToken = 0; // 검사 중 다른 파일을 고르면 이전 응답은 버린다
 let sending = false;
 
@@ -40,14 +42,16 @@ export function initUpload() {
   }
 
   guard.onAction(handleGuardAction);
+  sanitize.initSanitize({ onResult: handleSanitized, onCancel: backToOriginal });
   reset();
 }
 
 function reset() {
   if (sending) return;
   scanToken++;
-  state = { file: null, scan: "idle", scanResult: null, reason: "" };
+  state = { file: null, scan: "idle", scanResult: null, reason: "", mode: "original", sanitized: null };
   $("file-input").value = "";
+  sanitize.hideSanitize();
   $("dropzone").hidden = false;
   $("file-info").hidden = true;
   $("scan-card").hidden = true;
@@ -99,6 +103,9 @@ async function selectFile(file) {
 
 async function runScan(file) {
   const token = ++scanToken;
+  state.mode = "original";
+  state.sanitized = null;
+  sanitize.hideSanitize();
   setScan("scanning");
   try {
     const res = await api.scanFile(file);
@@ -195,11 +202,24 @@ function setScan(scan) {
   updateSendButton();
 }
 
-// 확인이 필요한 경우: 검사 불가(acknowledge_unsupported), 민감정보 원본 그대로 전송(acknowledge_risk)
+// 확인이 필요한 경우: 검사 불가(acknowledge_unsupported), 민감정보 원본 그대로 전송(acknowledge_risk),
+// 처리본에 민감정보가 남은 채 전송(acknowledge_risk)
 function renderConfirm() {
   const row = $("confirm-row");
   $("confirm-check").checked = false;
-  if (state.scan === "unscannable") {
+  $("btn-send").textContent = state.mode === "preview" ? "승인하고 QR 코드 만들기" : "QR 코드 만들기";
+  if (state.mode === "select") {
+    row.hidden = true;
+  } else if (state.mode === "preview") {
+    const res = state.sanitized.res;
+    if (res.clean) {
+      row.hidden = true;
+    } else {
+      const left = res.findings_after.map((f) => `${typeLabel(f.type)} ${f.count}건`).join(", ");
+      $("confirm-text").textContent = `처리본에 남은 민감정보(${left})를 포함해 보내는 위험을 이해했습니다.`;
+      row.hidden = false;
+    }
+  } else if (state.scan === "unscannable") {
     $("confirm-text").textContent = "민감정보 검사 없이 전송된다는 것을 확인했습니다.";
     row.hidden = false;
   } else if (state.scan === "blocked") {
@@ -211,8 +231,15 @@ function renderConfirm() {
 }
 
 function updateSendButton() {
-  const needsConfirm = state.scan === "unscannable" || state.scan === "blocked";
-  const ok = state.scan === "clean" || (needsConfirm && $("confirm-check").checked);
+  let ok;
+  if (state.mode === "select") {
+    ok = false; // 처리본을 먼저 만들어야 한다
+  } else if (state.mode === "preview") {
+    ok = state.sanitized.res.clean || $("confirm-check").checked;
+  } else {
+    const needsConfirm = state.scan === "unscannable" || state.scan === "blocked";
+    ok = state.scan === "clean" || (needsConfirm && $("confirm-check").checked);
+  }
   $("btn-send").disabled = sending || !ok;
 }
 
@@ -239,6 +266,7 @@ function setProgress(label, ratio = 0) {
 // ---------------------------------------------------------------- 전송
 
 function sendSelected() {
+  if (state.mode === "preview") return sendSanitized();
   const ref = state.scanResult ? { scan_id: state.scanResult.scan_id } : {};
   return sendBlob({
     blob: state.file,
@@ -249,6 +277,60 @@ function sendSelected() {
     acknowledgeRisk: state.scan === "blocked",
     acknowledgeUnsupported: state.scan === "unscannable",
   });
+}
+
+// 승인된 처리본 전송: 서버가 준 content_b64 바이트를 그대로 올린다 (해시가 sanitize 세션과 같아야 함)
+function sendSanitized() {
+  const { res } = state.sanitized;
+  const type = mimeOf(state.file);
+  return sendBlob({
+    blob: base64ToBlob(res.content_b64, type),
+    name: sanitizedName(state.file.name),
+    type,
+    ref: { sanitize_id: res.sanitize_id },
+    expectedSha256: res.sha256,
+    userApproved: true,
+    acknowledgeRisk: !res.clean,
+  });
+}
+
+// 고객정보.csv → 고객정보_정제본.csv (원본과 구분, 확장자 유지)
+function sanitizedName(name) {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}_정제본${name.slice(dot)}` : `${name}_정제본`;
+}
+
+// ---------------------------------------------------------------- 정제 흐름 (여정 3·4)
+
+function enterSelect(preset) {
+  if (state.scan !== "blocked" || sending) return;
+  state.mode = "select";
+  state.sanitized = null;
+  setStep(3);
+  sanitize.openSelect(state.file, state.scanResult.findings, preset);
+  guard.showSelecting(preset);
+  renderConfirm();
+  updateSendButton();
+}
+
+function handleSanitized(res, actions) {
+  state.mode = "preview";
+  state.sanitized = { res, actions };
+  setStep(4);
+  guard.showSanitized(actions, res);
+  $("send-error").hidden = true;
+  renderConfirm();
+  updateSendButton();
+}
+
+function backToOriginal() {
+  state.mode = "original";
+  state.sanitized = null;
+  sanitize.hideSanitize();
+  setStep(3);
+  guard.showFindings(state.file.name, state.scanResult.findings);
+  renderConfirm();
+  updateSendButton();
 }
 
 // 원본·처리본 공통 전송. ref: { scan_id } | { sanitize_id } | {}
@@ -317,6 +399,7 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
     setProgress(null);
     setStep(5);
     $("send-card").hidden = true;
+    sanitize.hideSanitize();
     guard.showSent(name);
     if (keyText) {
       // 서버가 만든 QR에는 키가 없으므로, 키를 붙인 링크로 브라우저에서 QR을 다시 그린다.
@@ -326,13 +409,22 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
       showTransfer(done, { onNew: reset });
     }
   } catch (e) {
-    const err = e instanceof ApiError ? e : new ApiError("INTERNAL_ERROR");
+    // 서버 응답이 아닌 브라우저 내부 오류를 "서버 오류"로 보이지 않게 구분
+    const err = e instanceof ApiError ? e : new ApiError("CLIENT_ERROR");
     setProgress(null);
     errBox.textContent = err.userMessage;
     errBox.hidden = false;
     // 업로드 단계 이후 실패한 전송은 쓸 수 없다 (서버가 폐기했거나 업로드 권한이 끝남) → 토큰 정리
     if (created && stage !== "create") removeToken(created.id);
-    if (err.code === "EXPIRED" && stage === "create" && state.file && state.scanResult) {
+    if (err.code === "EXPIRED" && stage === "create" && ref.sanitize_id) {
+      // 처리본 세션(10분)이 만료됨 → 같은 선택으로 다시 정제하게 한다
+      errBox.textContent = "처리본 유효 시간(10분)이 지났습니다. 처리본을 다시 만들어 주세요.";
+      state.mode = "select";
+      state.sanitized = null;
+      setStep(3);
+      sanitize.reopenWithRemaining([]);
+      renderConfirm();
+    } else if (err.code === "EXPIRED" && stage === "create" && state.file && state.scanResult) {
       // 검사 세션(10분)이 만료됨 → 다시 검사하고 사용자가 다시 누르게 한다
       errBox.textContent = "검사 결과가 만료되어 다시 검사했습니다. 다시 전송하세요.";
       runScan(state.file);
@@ -352,8 +444,15 @@ function handleGuardAction(action) {
   if (action === "CANCEL") {
     reset();
     toast("전송을 취소했습니다.");
-    return;
+  } else if (action === "MASK" || action === "DELETE") {
+    enterSelect(action);
+  } else if (action === "MORE" && state.sanitized) {
+    // 남은 유형까지 정제: 원본 + 늘어난 조치로 다시 만든다
+    state.mode = "select";
+    setStep(3);
+    sanitize.reopenWithRemaining(state.sanitized.res.findings_after);
+    state.sanitized = null;
+    renderConfirm();
+    updateSendButton();
   }
-  // MASK / DELETE → Day 3에 /api/sanitize → 미리보기 승인 → sendBlob({ ref: { sanitize_id } }) 연결
-  toast("정제 흐름은 Day 3에 연결됩니다.");
 }

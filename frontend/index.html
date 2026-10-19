@@ -47,6 +47,30 @@
           <ul id="scan-findings" class="findings"></ul>
         </div>
 
+        <!-- STEP 3: 정제 방법 선택 -->
+        <div id="sanitize-card" class="card" hidden>
+          <h2>정제 방법 선택</h2>
+          <p class="muted">원본은 변경하지 않고 별도 처리본을 만든 뒤 다시 검사합니다.</p>
+          <ul id="sanitize-types" class="type-choices"></ul>
+          <div class="actions">
+            <button id="btn-sanitize" class="btn btn-primary" type="button">처리본 만들기</button>
+            <button id="btn-sanitize-cancel" class="btn btn-ghost" type="button">원본으로 돌아가기</button>
+          </div>
+          <div id="sanitize-error" class="error" role="alert" hidden></div>
+        </div>
+
+        <!-- STEP 4: 처리본 미리보기 -->
+        <div id="preview-card" class="card" hidden>
+          <div class="row-between">
+            <h2>처리본 미리보기</h2>
+            <button id="btn-resanitize" class="btn btn-ghost btn-sm" type="button">다시 선택</button>
+          </div>
+          <div id="recheck-status" class="status" aria-live="polite"></div>
+          <ul id="recheck-findings" class="findings"></ul>
+          <pre id="preview-text" class="preview"></pre>
+          <p class="muted small">상위 20행만 표시합니다. 정규식으로 찾을 수 있는 유형만 처리되므로, 문맥상 개인정보가 남아 있지 않은지 직접 확인하세요.</p>
+        </div>
+
         <!-- 전송 옵션 -->
         <div id="send-card" class="card" hidden>
           <h2>전송</h2>
