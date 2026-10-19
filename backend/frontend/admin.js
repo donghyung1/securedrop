@@ -2,7 +2,8 @@
 // 세션 토큰은 sessionStorage에만 둔다(탭을 닫으면 사라짐, 서버 유효기간 8시간). 쿠키 미사용.
 // 모든 값은 textContent로만 그려 서버 응답이 HTML로 해석되지 않게 한다.
 (() => {
-  const API = String((window.SD_CONFIG && window.SD_CONFIG.apiBase) || "").replace(/\/+$/, "");
+  const config = window.SD_CONFIG || {};
+  const API = String(config.adminApiBase ?? config.apiBase ?? "").replace(/\/+$/, "");
   const CW_URL = (window.SD_CONFIG && window.SD_CONFIG.cloudwatchUrl) || "";
   const KEY = "sd_admin_session";
   const $ = (id) => document.getElementById(id);

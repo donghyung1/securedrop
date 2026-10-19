@@ -31,7 +31,10 @@ def main():
             if not path.startswith("/api/"):
                 name = path.lstrip("/")
                 if name == "config.js":
-                    route.fulfill(content_type="application/javascript", body="window.SD_CONFIG = {};")
+                    route.fulfill(
+                        content_type="application/javascript",
+                        body='window.SD_CONFIG = {apiBase: "https://api.invalid", adminApiBase: ""};',
+                    )
                 else:
                     route.fulfill(path=str(FRONTEND / name))
                 return
