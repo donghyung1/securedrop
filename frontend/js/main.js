@@ -1,5 +1,5 @@
 // 업로드 페이지 진입점
-import { CONFIG } from "./config.js";
+import { CONFIG } from "./settings.js";
 import { initUpload } from "./upload.js";
 import { showModeBadge } from "./ui.js";
 

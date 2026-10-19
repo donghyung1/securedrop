@@ -2,7 +2,7 @@
 // - 업로드는 3단계: createTransfer(메타·해시) → uploadToS3(Presigned POST, 브라우저 → S3 직접) → completeTransfer
 // - 관리 토큰이 필요한 호출은 manage.js의 토큰을 X-Manage-Token으로 보낸다.
 // - CONFIG.USE_MOCK 이면 서버·S3 없이 mock으로 동작한다 (서버 검증 순서·해시 비교까지 흉내).
-import { CONFIG } from "./config.js";
+import { CONFIG } from "./settings.js";
 
 export { CONFIG };
 

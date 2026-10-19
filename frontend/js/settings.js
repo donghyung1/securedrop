@@ -1,4 +1,5 @@
-// 배포 환경별 설정 (PRD v1.3 §12: CloudFront 도메인·API 주소는 이 파일 한 곳에서 관리)
+// 화면 고정값 (상한·확장자·만료 선택지)과 mock 전환
+// - 배포 주소(apiBase)는 웹 루트의 config.js(window.SD_CONFIG)에서 읽는다. 관리자 콘솔과 같은 파일이다.
 // - USE_MOCK 전환: URL에 ?api=real 또는 ?api=mock (localStorage에 기억)
 
 const params = new URLSearchParams(location.search);
@@ -10,9 +11,7 @@ let savedMode = null;
 try { savedMode = localStorage.getItem("sd.api"); } catch { /* 저장소 차단 */ }
 
 export const CONFIG = {
-  // 로컬: http://localhost:8000
-  // 배포: https://<api-id>.execute-api.ap-northeast-2.amazonaws.com/prod
-  API_BASE: "http://localhost:8000",
+  API_BASE: String(window.SD_CONFIG?.apiBase || "http://localhost:8000").replace(/\/+$/, ""),
   USE_MOCK: (apiParam || savedMode || "mock") === "mock",
 
   MAX_FILE_MB: 20,        // 전송 상한 (S3 Presigned POST content-length-range)
