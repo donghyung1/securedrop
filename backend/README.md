@@ -1,6 +1,6 @@
 # SecureDrop Cloud Backend
 
-PRD v1.1의 백엔드를 구현한 FastAPI 서버입니다. 승인된 전송 파일은 S3, 전송 메타데이터와 이벤트는 SQLite에 저장합니다. 정제 처리본은 TTL 동안 서버 메모리에만 보관합니다. Python 3.10 이상을 지원하고 개발 검증은 Python 3.12 및 uv를 사용하며 `uv.lock`으로 의존성을 고정합니다.
+PRD v1.2의 백엔드를 구현한 FastAPI 서버입니다. 승인된 전송 파일은 S3, 전송 메타데이터와 이벤트는 SQLite에 저장합니다. 정제 처리본은 TTL 동안 서버 메모리에만 보관합니다. Python 3.10 이상을 지원하고 개발 검증은 Python 3.12 및 uv를 사용하며 `uv.lock`으로 의존성을 고정합니다.
 
 ## 실행
 
@@ -22,6 +22,7 @@ uv run uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log
 위 서버를 실행한 뒤 **http://localhost:8000/** 에 접속하세요. 별도의 Node.js 설치나 빌드 없이 HTML/CSS/JavaScript 화면을 제공합니다.
 
 - 텍스트 민감정보 검사 및 샘플 입력
+- TXT/CSV 선택 즉시 파일 검사(최대 5 MiB), 검사 실패 시 전송 보류
 - 파일 전송, 5분/10분/1시간 만료 링크와 QR 코드, 링크 복사 및 전송 폐기
 - 민감정보 발견 시 전송 중단, TXT/CSV 전체 마스킹·삭제, 처리본 미리보기와 승인
 - 별도 위험 확인 후 민감정보를 포함한 파일 전송
@@ -36,10 +37,11 @@ uv run uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log
 |---|---|---|
 | GET | `/api/health` | 상태, 리전 |
 | POST | `/api/scan` | JSON `text`, 최대 50,000자 |
+| POST | `/api/scan/file` | multipart `file`(.txt/.csv), 최대 5 MiB, 파일명·유형·개수 반환 |
 | POST | `/api/sanitize` | multipart `file`(.txt/.csv), `actions`(JSON 배열), 정제·재검사·미리보기 |
 | DELETE | `/api/sanitize/{sanitize_id}` | 대기 중인 처리본을 메모리에서 폐기 |
 | POST | `/api/assist` | JSON `message`, `context`(파일명, findings), 고정 조치·버튼 반환 |
-| POST | `/api/transfers` | multipart `file` 또는 `sanitize_id`, `expires_in`, `confirm_sensitive`, `user_approved` |
+| POST | `/api/transfers` | multipart `file` 또는 `sanitize_id`, `expires_in`, `confirm_sensitive`, `confirm_unscanned`, `user_approved` |
 | GET | `/api/transfers/{id}` | 활성 상태 및 만료 시간 |
 | DELETE | `/api/transfers/{id}` | S3 객체 삭제 후 폐기 기록 |
 | POST | `/api/logs` | `event: BLOCK`, `types: [...]`, `source: web 또는 extension` |
@@ -58,7 +60,9 @@ Invoke-RestMethod http://localhost:8000/api/scan -Method Post `
 
 탐지 유형은 `RRN`, `PHONE`, `EMAIL`, `AWS_ACCESS_KEY`, `API_KEY`, `CARD`입니다. 주민등록번호는 생년월일·기존 체크섬, 카드번호는 Luhn 검사로 검증합니다. 정규식 탐지는 모든 기밀이나 토큰을 식별하지 못합니다. 체크섬 기반 RRN 규칙은 PRD 기준이며 무작위로 부여된 번호는 놓칠 수 있습니다.
 
-파일은 최대 20 MiB입니다. 만료 시간은 300/600/3600초, 기본 600초입니다. `.txt .csv .json .md .log .xml .yaml .yml .pdf .png .jpg .jpeg .gif .webp`만 허용합니다. 텍스트 계열은 UTF-8, BOM이 있는 UTF-16, CP949를 지원하며 파일 전체를 검사합니다. PDF와 이미지는 내용 검사 대상이 아닙니다. MIME 검사나 바이러스 검사는 포함하지 않습니다.
+전송 파일은 최대 20 MiB입니다. 만료 시간은 300/600/3600초, 기본 600초입니다. `.txt .csv .json .md .log .xml .yaml .yml .pdf .png .jpg .jpeg .gif .webp`만 허용합니다. PRD v1.2 기준으로 검사·정제는 `.txt`·`.csv`만 지원합니다. UTF-8, BOM이 있는 UTF-16, CP949를 지원하며 파일 전체를 검사합니다. 나머지 허용 형식은 검사 미지원 안내에 별도로 동의하여 `confirm_unscanned=true`를 보내야 전송할 수 있습니다. 동의가 없으면 415 `UNSUPPORTED_TYPE`, `confirmation_required: true`, `scan_supported: false`를 반환하며 S3에 저장하지 않습니다. `user_approved`나 `confirm_sensitive`는 미지원 검사 확인을 대신하지 않습니다. MIME 검사나 바이러스 검사는 포함하지 않습니다.
+
+`/api/scan/file`은 multipart `file`을 메모리에서 검사하고 `{"filename":"customers.csv","blocked":true,"findings":[{"type":"PHONE","count":1}]}`을 반환합니다. 원문·위치는 반환하지 않으며 검사 결과·파일을 DB·S3·로그에 저장하지 않습니다. 텍스트 API의 50,000자 제한은 적용하지 않습니다. 파일 검사 크기 제한은 `SCAN_FILE_MAX_MB`(기본 5, 설정 범위 1~5 MiB)로 전송 한도 `MAX_FILE_MB`와 별도로 관리합니다. 초과는 413 `FILE_TOO_LARGE`, 미지원 확장자는 415 `UNSUPPORTED_TYPE`, 빈 파일·잘못된 인코딩은 422 `VALIDATION_ERROR`입니다. 플러그인의 두 도구에는 파일 검사 API를 추가하지 않습니다.
 
 민감정보가 있으면 업로드 없이 HTTP 409 `SENSITIVE_DATA`, `findings`, `confirmation_required: true`, `sanitize_available`을 반환합니다. `.txt`·`.csv`는 다음 정제 흐름으로 안내합니다. 위험을 이해하고 원본 그대로 진행하는 별도 확인에는 `confirm_sensitive=true`를 보냅니다. 플러그인은 모든 업로드에 `user_approved=true`가 필요하며, 민감정보가 있으면 별도로 `confirm_sensitive=true`도 필요합니다. 이 플래그는 클라이언트가 전달하는 승인 표시이므로 실제 사용자 승인 UI는 호출 플랫폼에서 구현해야 합니다. 외부 AI 플랫폼 연결 및 승인 UI는 이번 백엔드 구현에 포함하지 않았으며 `/docs`에서 시연할 수 있습니다.
 

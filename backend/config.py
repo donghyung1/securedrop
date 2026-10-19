@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     aws_profile: str | None = None
     s3_bucket: str = ""
     max_file_mb: int = Field(default=20, ge=1, le=20)
+    scan_file_max_mb: int = Field(default=5, ge=1, le=5)
     default_expires_sec: int = 600
     max_expires_sec: int = Field(default=3600, ge=300, le=3600)
     sanitize_ttl_sec: int = Field(default=600, ge=1, le=3600)

@@ -32,8 +32,21 @@ from store import Store, now
 
 DetectionType = Literal["RRN", "PHONE", "EMAIL", "AWS_ACCESS_KEY", "API_KEY", "CARD"]
 Source = Literal["web", "extension", "plugin"]
-TEXT_EXTENSIONS = {".txt", ".csv", ".json", ".md", ".log", ".xml", ".yaml", ".yml"}
-ALLOWED_EXTENSIONS = TEXT_EXTENSIONS | {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+SCAN_EXTENSIONS = {".txt", ".csv"}
+ALLOWED_EXTENSIONS = SCAN_EXTENSIONS | {
+    ".json",
+    ".md",
+    ".log",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+}
 
 
 class ScanInput(BaseModel):
@@ -92,6 +105,10 @@ class ScanResult(BaseModel):
     findings: list[Finding]
 
 
+class FileScanResult(ScanResult):
+    filename: str
+
+
 class TransferResult(BaseModel):
     id: str
     url: str
@@ -106,6 +123,11 @@ class ErrorDetail(BaseModel):
 
 class ErrorResult(BaseModel):
     error: ErrorDetail
+
+
+class UnscannedResult(ErrorResult):
+    confirmation_required: bool
+    scan_supported: bool
 
 
 class SensitiveResult(ErrorResult, ScanResult):
@@ -123,19 +145,20 @@ class LogInput(BaseModel):
 class BodyLimitMiddleware:
     """Bound chunked requests too, before multipart parsing creates temporary files."""
 
-    def __init__(self, app, limit: int):
-        self.app, self.limit = app, limit
+    def __init__(self, app, limit: int, scan_limit: int):
+        self.app, self.limit, self.scan_limit = app, limit, scan_limit
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["method"] not in ("POST", "PUT", "PATCH"):
             return await self.app(scope, receive, send)
         body = bytearray()
+        limit = self.scan_limit if scope["path"].rstrip("/") == "/api/scan/file" else self.limit
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > self.limit:
+            if len(body) > limit:
                 response = JSONResponse(
                     {
                         "error": {
@@ -199,7 +222,11 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
                 allow_methods=["GET", "POST", "DELETE"],
                 allow_headers=["Content-Type", "X-API-Key", "X-Source"],
             ),
-            Middleware(BodyLimitMiddleware, limit=settings.max_file_mb * 1024 * 1024 + 65_536),
+            Middleware(
+                BodyLimitMiddleware,
+                limit=settings.max_file_mb * 1024 * 1024 + 65_536,
+                scan_limit=settings.scan_file_max_mb * 1024 * 1024 + 65_536,
+            ),
         ],
     )
     app.router.route_class = MemoryUploadRoute
@@ -310,20 +337,29 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
         filename = PurePosixPath((filename or "").replace("\\", "/")).name
         extension = PurePosixPath(filename).suffix.lower()
         if extension not in allowed or any(ord(c) < 32 for c in filename):
-            status = 415 if allowed == {".txt", ".csv"} else 422
+            status = 415 if allowed == SCAN_EXTENSIONS else 422
             code = "UNSUPPORTED_TYPE" if status == 415 else "VALIDATION_ERROR"
             raise APIError(status, code, "허용되지 않는 파일 형식입니다.")
         return filename, extension
 
-    async def read_file(file):
-        content = await file.read(settings.max_file_mb * 1024 * 1024 + 1)
-        if len(content) > settings.max_file_mb * 1024 * 1024:
-            raise APIError(
-                413, "FILE_TOO_LARGE", f"파일 크기는 최대 {settings.max_file_mb}MiB입니다."
-            )
+    async def read_file(file, max_mb=None):
+        max_mb = settings.max_file_mb if max_mb is None else max_mb
+        content = await file.read(max_mb * 1024 * 1024 + 1)
+        if len(content) > max_mb * 1024 * 1024:
+            raise APIError(413, "FILE_TOO_LARGE", f"파일 크기는 최대 {max_mb}MiB입니다.")
         if not content:
             raise APIError(422, "VALIDATION_ERROR", "빈 파일은 처리할 수 없습니다.")
         return content
+
+    @app.post("/api/scan/file", response_model=FileScanResult, dependencies=[auth])
+    async def scan_uploaded_file(file: Annotated[UploadFile, File()]):
+        try:
+            filename, _ = validate_filename(file.filename, SCAN_EXTENSIONS)
+            content = await read_file(file, settings.scan_file_max_mb)
+            result = await run_in_threadpool(scan_file, decode_text(content))
+            return {"filename": filename, **result}
+        finally:
+            await file.close()
 
     @app.post("/api/assist", response_model=AssistResult, dependencies=[auth])
     def assist(payload: AssistInput):
@@ -338,7 +374,7 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
         actions: Annotated[str, Form()],
     ):
         try:
-            filename, _ = validate_filename(file.filename, {".txt", ".csv"})
+            filename, _ = validate_filename(file.filename, SCAN_EXTENSIONS)
             try:
                 parsed = TypeAdapter(list[SanitizeAction]).validate_json(actions)
             except ValidationError as exc:
@@ -402,14 +438,14 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
         response_model=TransferResult,
         operation_id="create_transfer",
         dependencies=[auth],
-        responses={409: {"model": SensitiveResult}},
+        responses={409: {"model": SensitiveResult}, 415: {"model": UnscannedResult}},
     )
     @app.post(
         "/plugin/transfers",
         response_model=TransferResult,
         operation_id="plugin_create_transfer",
         dependencies=[auth],
-        responses={409: {"model": SensitiveResult}},
+        responses={409: {"model": SensitiveResult}, 415: {"model": UnscannedResult}},
     )
     async def create_transfer(
         request: Request,
@@ -417,6 +453,7 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
         sanitize_id: Annotated[str | None, Form()] = None,
         expires_in: Annotated[int | None, Form()] = None,
         confirm_sensitive: Annotated[bool, Form()] = False,
+        confirm_unscanned: Annotated[bool, Form()] = False,
         user_approved: Annotated[bool, Form()] = False,
     ):
         """플러그인과 처리본 전송은 미리보기 등 사용자 확인 후 user_approved=true가 필요합니다."""
@@ -451,7 +488,19 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
                 filename, extension = validate_filename(file.filename)
                 content = await read_file(file)
             findings = []
-            if extension in TEXT_EXTENSIONS:
+            if extension not in SCAN_EXTENSIONS and not confirm_unscanned:
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": "UNSUPPORTED_TYPE",
+                            "message": "이 형식은 민감정보 검사를 지원하지 않습니다. 확인 후 전송하세요.",
+                        },
+                        "confirmation_required": True,
+                        "scan_supported": False,
+                    },
+                    status_code=415,
+                )
+            if extension in SCAN_EXTENSIONS:
                 text = decode_text(content)
                 result = await run_in_threadpool(scan_file, text)
                 findings = [item["type"] for item in result["findings"]]
@@ -465,7 +514,7 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
                             },
                             **result,
                             "confirmation_required": True,
-                            "sanitize_available": extension in {".txt", ".csv"},
+                            "sanitize_available": extension in SCAN_EXTENSIONS,
                         },
                         status_code=409,
                     )

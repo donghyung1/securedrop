@@ -12,7 +12,7 @@
   <main>
     <header><div><p class="eyebrow">SECUREDROP CLOUD / DEMO</p><h1>확인하고, 안전하게 공유하세요.</h1>
       <p>민감정보 검사부터 정제, 만료되는 다운로드 링크까지.</p></div><span id="health" class="badge">서버 확인 중</span></header>
-    <p class="notice">테스트용 콘솔입니다. 전송 시 실제 S3에 업로드됩니다. PDF·이미지는 내용 검사를 지원하지 않습니다.</p>
+    <p class="notice">테스트용 콘솔입니다. 전송 시 실제 S3에 업로드됩니다. 민감정보 검사·정제는 TXT·CSV만 지원합니다.</p>
     <div class="grid">
       <section><p class="eyebrow">01 / TEXT CHECK</p><h2>텍스트 검사</h2>
         <label for="text">검사할 텍스트</label><textarea id="text" rows="7" maxlength="50000" placeholder="검사할 내용을 입력하세요"></textarea>
@@ -23,11 +23,11 @@
         <label for="file">전송할 파일 (최대 20 MiB)</label><input id="file" type="file" accept=".txt,.csv,.json,.md,.log,.xml,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.gif,.webp">
         <label for="expiry">링크 유효 시간</label><select id="expiry"><option value="300">5분</option><option value="600" selected>10분</option><option value="3600">1시간</option></select>
         <button id="upload" type="button" disabled>검사 후 링크 만들기</button>
-        <p>TXT·CSV는 민감정보 탐지 시 마스킹 또는 삭제할 수 있습니다.</p>
+        <p>TXT·CSV는 선택 즉시 최대 5 MiB까지 검사하며, 민감정보 탐지 시 마스킹 또는 삭제할 수 있습니다. 다른 형식은 검사 미지원 확인 후 전송합니다.</p>
         <div id="sensitive" hidden>
           <p id="findings" class="warning"></p>
           <div id="sanitize-actions" class="actions"><button id="mask" type="button">모두 마스킹</button><button id="remove" class="secondary" type="button">탐지 값 모두 삭제</button></div>
-          <label class="check"><input id="risk" type="checkbox"> 민감정보가 포함된 파일을 공유할 위험을 이해했습니다.</label>
+          <label class="check"><input id="risk" type="checkbox"> 민감정보가 포함되거나 검사되지 않은 파일을 공유할 위험을 이해했습니다.</label>
           <button id="original" class="danger" type="button" disabled>위험 확인 후 현재 파일 전송</button>
         </div>
         <div id="draft" hidden><h3>처리본 미리보기</h3><p id="draft-result"></p><pre id="preview"></pre>

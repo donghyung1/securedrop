@@ -92,6 +92,116 @@ def test_scan_validation_privacy_and_health(env):
     assert client.get("/api/logs", headers=ORIGIN).json() == {"items": []}
 
 
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "cp949"])
+@pytest.mark.parametrize("filename", ["고객정보.csv", "NOTES.TXT"])
+def test_file_scan_shared_rules_and_no_persistence(env, encoding, filename):
+    client, app, s3 = env
+    text = "이름,전화,주민번호\n김,010-1234-5678,900101-1234568\n" * 2
+    response = client.post(
+        "/api/scan/file",
+        headers=ORIGIN,
+        files={"file": (filename, text.encode(encoding))},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"filename": filename, **scan(text)}
+    assert "010-1234-5678" not in response.text
+    assert "900101-1234568" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert not app.state.drafts.entries
+    assert app.state.store.logs(10) == []
+    assert s3.list_objects_v2(Bucket="securedrop-test")["KeyCount"] == 0
+
+
+def test_file_scan_five_mib_boundary_independent_of_text_and_transfer_limits(env, monkeypatch):
+    client, _, _ = env  # Transfer limit is 1 MiB; file scan still allows 5 MiB.
+
+    def forbidden_rollover(self):
+        raise AssertionError("File scans must stay in memory")
+
+    monkeypatch.setattr(tempfile.SpooledTemporaryFile, "rollover", forbidden_rollover)
+    content = b" " * (5 * 1024 * 1024 - 13) + b"010-1234-5678"
+    response = client.post(
+        "/api/scan/file",
+        headers=ORIGIN,
+        files={"file": ("large.csv", content)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["findings"] == [{"type": "PHONE", "count": 1}]
+    response = client.post(
+        "/api/scan/file",
+        headers=ORIGIN,
+        files={"file": ("large.csv", content + b" ")},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "FILE_TOO_LARGE"
+
+
+@pytest.mark.parametrize(
+    "filename,content,status,code",
+    [
+        ("report.pdf", b"hello", 415, "UNSUPPORTED_TYPE"),
+        ("data.json", b"{}", 415, "UNSUPPORTED_TYPE"),
+        ("empty.txt", b"", 422, "VALIDATION_ERROR"),
+        ("binary.csv", b"\x00secret", 422, "VALIDATION_ERROR"),
+        ("invalid.txt", b"\xff", 422, "VALIDATION_ERROR"),
+    ],
+)
+def test_file_scan_errors(env, filename, content, status, code):
+    client, _, _ = env
+    response = client.post(
+        "/api/scan/file",
+        headers=ORIGIN,
+        files={"file": (filename, content)},
+    )
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
+    assert "secret" not in response.text
+
+
+def test_file_scan_auth_schema_and_configured_limit(env):
+    client, app, _ = env
+    files = {"file": ("safe.txt", b"hello")}
+    assert client.post("/api/scan/file", files=files).status_code == 401
+    assert client.post("/api/scan/file", headers=KEY, files=files).status_code == 200
+    assert client.post("/api/scan/file", headers=ORIGIN).status_code == 422
+    assert "/api/scan/file" in client.get("/openapi.json").json()["paths"]
+    assert set(client.get("/plugin/openapi.json").json()["paths"]) == {
+        "/plugin/scan",
+        "/plugin/transfers",
+    }
+    settings = app.state.settings.model_copy(update={"scan_file_max_mb": 1})
+    with TestClient(create_app(settings)) as other:
+        response = other.post(
+            "/api/scan/file",
+            headers=ORIGIN,
+            files={"file": ("large.txt", b" " * (1024 * 1024 + 1))},
+        )
+        assert response.status_code == 413
+        # Also reject oversized streamed multipart bodies before parsing.
+        response = other.post(
+            "/api/scan/file",
+            headers={**ORIGIN, "Content-Type": "multipart/form-data; boundary=demo"},
+            content=(b"x" * 100_000 for _ in range(12)),
+        )
+        assert response.status_code == 413
+
+
+@pytest.mark.parametrize("filename", ["sample.pdf", "photo.png", "data.json"])
+def test_unscanned_transfer_requires_separate_confirmation(env, filename):
+    client, _, s3 = env
+    for data in ({}, {"user_approved": "true", "confirm_sensitive": "true"}):
+        response = upload(client, filename=filename, data=data)
+        assert response.status_code == 415
+        assert response.json()["error"]["code"] == "UNSUPPORTED_TYPE"
+        assert response.json()["confirmation_required"] is True
+        assert response.json()["scan_supported"] is False
+    assert s3.list_objects_v2(Bucket="securedrop-test")["KeyCount"] == 0
+    assert upload(client, filename=filename, data={"confirm_unscanned": "true"}).status_code == 200
+    # Confirmation cannot bypass the whitelist or sensitive-data detection.
+    assert upload(client, filename="bad.exe", data={"confirm_unscanned": "true"}).status_code == 422
+    assert upload(client, b"010-1234-5678", data={"confirm_unscanned": "true"}).status_code == 409
+
+
 @pytest.mark.parametrize(
     "origin",
     [
@@ -241,7 +351,12 @@ def test_twenty_mib_boundary(env):
     _, app, s3 = env
     settings = app.state.settings.model_copy(update={"max_file_mb": 20})
     with TestClient(create_app(settings)) as client:
-        response = upload(client, b"a" * (20 * 1024 * 1024), filename="sample.pdf")
+        response = upload(
+            client,
+            b"a" * (20 * 1024 * 1024),
+            filename="sample.pdf",
+            data={"confirm_unscanned": "true"},
+        )
         assert response.status_code == 200, response.text
         objects = s3.list_objects_v2(Bucket="securedrop-test")["Contents"]
         assert objects[0]["Size"] == 20 * 1024 * 1024
@@ -485,7 +600,15 @@ def test_large_multipart_never_rolls_to_disk(env, monkeypatch):
         result = sanitize_upload(client, content, [{"action": "MASK", "targets": ["PHONE"]}])
         assert result.status_code == 200, result.text
         assert result.json()["clean"]
-        assert upload(client, b"x" * (2 * 1024 * 1024), filename="a.pdf").status_code == 200
+        assert (
+            upload(
+                client,
+                b"x" * (2 * 1024 * 1024),
+                filename="a.pdf",
+                data={"confirm_unscanned": "true"},
+            ).status_code
+            == 200
+        )
 
 
 @pytest.mark.parametrize(

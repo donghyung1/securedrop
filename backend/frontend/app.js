@@ -5,6 +5,8 @@ let draftId = null;
 let transfer = null;
 let findings = [];
 let busy = false;
+let scanReady = false;
+const scanExtensions = new Set(["txt", "csv"]);
 const describe = (items) => items.map((item) => `${labels[item.type] || item.type} ${item.count}건`).join(" · ");
 
 async function api(path, options = {}) {
@@ -17,7 +19,7 @@ async function api(path, options = {}) {
 }
 
 function sync() {
-  $("upload").disabled = busy || !$("file").files.length || Boolean(draftId) || Boolean(transfer);
+  $("upload").disabled = busy || !scanReady || !$("sensitive").hidden || !$("file").files.length || Boolean(draftId) || Boolean(transfer);
   $("original").disabled = busy || !$("risk").checked || (Boolean(draftId) && !$("approve").checked);
   $("send-draft").disabled = busy || !draftId || !$("approve").checked;
   $("file").disabled = busy || Boolean(draftId) || Boolean(transfer);
@@ -51,12 +53,14 @@ async function send(confirmSensitive = false) {
   form.set("expires_in", $("expiry").value);
   form.set("user_approved", "true");
   form.set("confirm_sensitive", String(confirmSensitive));
+  const extension = $("file").files[0]?.name.split(".").pop().toLowerCase();
+  form.set("confirm_unscanned", String(confirmSensitive && !scanExtensions.has(extension)));
   try {
     transfer = await api("/api/transfers", { method: "POST", body: form });
   } catch (error) {
-    if (error.status !== 409) throw error;
-    findings = error.data.findings;
-    $("findings").textContent = `민감정보 발견: ${describe(findings)}`;
+    if (error.status !== 409 && !(error.status === 415 && error.data.confirmation_required)) throw error;
+    findings = error.data.findings || [];
+    $("findings").textContent = error.status === 415 ? "이 형식은 민감정보 검사를 지원하지 않습니다. 내용을 직접 확인한 후 전송하세요." : `민감정보 발견: ${describe(findings)}`;
     $("sensitive").hidden = false;
     $("sanitize-actions").hidden = !error.data.sanitize_available;
     $("risk").checked = false;
@@ -112,15 +116,35 @@ $("scan").onclick = () => run(async () => {
   $("scan-result").textContent = result.blocked ? `민감정보 발견: ${describe(result.findings)}` : "검사 완료: 탐지된 민감정보 없음";
   $("status").textContent = "텍스트 검사를 완료했습니다.";
 });
-$("file").onchange = () => {
+$("file").onchange = () => run(async () => {
   clearSensitive();
+  scanReady = false;
   const file = $("file").files[0];
   if (file && (!file.size || file.size > 20 * 1024 * 1024)) {
     $("file").value = "";
     $("status").textContent = "비어 있지 않은 20 MiB 이하 파일을 선택하세요.";
-  } else $("status").textContent = file ? `${file.name} 선택됨` : "";
-  sync();
-};
+    return;
+  }
+  if (!file) { $("status").textContent = ""; return; }
+  if (!scanExtensions.has(file.name.split(".").pop().toLowerCase())) {
+    $("findings").textContent = "이 형식은 민감정보 검사를 지원하지 않습니다. 내용을 직접 확인한 후 전송하세요.";
+    $("sanitize-actions").hidden = true;
+    $("sensitive").hidden = false;
+    $("status").textContent = "검사 미지원 파일입니다. 전송하려면 별도로 확인하세요.";
+    return;
+  }
+  const form = new FormData();
+  form.set("file", file);
+  const result = await api("/api/scan/file", { method: "POST", body: form });
+  scanReady = true;
+  findings = result.findings;
+  if (result.blocked) {
+    $("findings").textContent = `민감정보 발견: ${describe(findings)}`;
+    $("sanitize-actions").hidden = false;
+    $("sensitive").hidden = false;
+    $("status").textContent = "원본 전송이 보류되었습니다. 정제하거나 위험을 확인하세요.";
+  } else $("status").textContent = "파일 검사 완료: 탐지된 민감정보 없음";
+});
 $("upload").onclick = () => run(() => send());
 $("original").onclick = () => run(() => send(true));
 $("mask").onclick = () => run(() => sanitize("MASK"));
