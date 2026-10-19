@@ -1,37 +1,48 @@
-import asyncio
+import base64
 import hashlib
 import hmac
 import json
+import logging
+import secrets
 import time
-from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timedelta
-from pathlib import Path, PurePosixPath
+from collections import Counter
+from datetime import date, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from fastapi.security import APIKeyHeader
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 
+from auth import new_token, password_hash, token_hash, verify_password
+from body_limit import BodyLimitMiddleware
 from config import Settings
 from detector import TYPES, scan, scan_file
 from errors import APIError
 from intent import interpret
 from multipart_memory import MemoryUploadRoute
-from sanitizer import Drafts, decode_text, sanitize
+from sanitizer import decode_text, sanitize
+from schemas import (
+    AssistInput,
+    AssistResult,
+    FileScanResult,
+    LogInput,
+    SanitizeAction,
+    SanitizeResult,
+    ScanInput,
+    ScanResult,
+)
 from storage import Storage, qr_data
 from store import Store, now
 
-DetectionType = Literal["RRN", "PHONE", "EMAIL", "AWS_ACCESS_KEY", "API_KEY", "CARD"]
-Source = Literal["web", "extension", "plugin"]
 SCAN_EXTENSIONS = {".txt", ".csv"}
 ALLOWED_EXTENSIONS = SCAN_EXTENSIONS | {
     ".json",
@@ -47,238 +58,112 @@ ALLOWED_EXTENSIONS = SCAN_EXTENSIONS | {
     ".gif",
     ".webp",
 }
+logger = logging.getLogger("securedrop")
+logger.setLevel(logging.INFO)
 
 
-class ScanInput(BaseModel):
+class FileMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    text: str = Field(max_length=50_000)
+    name: str = Field(min_length=1, max_length=255)
+    size: int = Field(strict=True, ge=1)
+    type: str = Field(
+        default="application/octet-stream",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[\w.+-]+/[\w.+-]+$",
+    )
+    sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    scan_id: str | None = Field(default=None, max_length=64)
+    sanitize_id: str | None = Field(default=None, max_length=64)
 
 
-class Finding(BaseModel):
+class TransferInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: DetectionType
-    count: int = Field(ge=1)
+    files: list[FileMetadata] = Field(min_length=1, max_length=5)
+    scan_id: str | None = Field(default=None, max_length=64)
+    sanitize_id: str | None = Field(default=None, max_length=64)
+    expires_in: int | None = None
+    encrypted: bool = False
+    acknowledge_risk: bool = False
+    acknowledge_unsupported: bool = False
+    user_approved: bool = False
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        if (self.scan_id and self.sanitize_id) or (
+            len(self.files) != 1 and (self.scan_id or self.sanitize_id)
+        ):
+            raise ValueError("Use one reference per file")
+        for item in self.files:
+            refs = [item.scan_id, item.sanitize_id, self.scan_id, self.sanitize_id]
+            if sum(bool(ref) for ref in refs) > 1:
+                raise ValueError("Use one reference per file")
+        return self
 
 
-class SanitizeAction(BaseModel):
+class LoginInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["MASK", "DELETE", "CANCEL"]
-    targets: list[DetectionType] = Field(default_factory=list, max_length=len(TYPES))
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=1024)
 
 
-class SanitizeResult(BaseModel):
-    sanitize_id: str | None
-    findings_before: list[Finding]
-    findings_after: list[Finding]
-    preview: str
-    clean: bool
-    cancelled: bool = False
+class PluginTextInput(ScanInput):
+    expires_in: int | None = None
+    user_approved: bool = False
 
 
-class AssistContext(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    filename: str = Field(default="", max_length=255)
-    findings: list[Finding] = Field(max_length=len(TYPES))
+def validate_filename(filename, allowed=ALLOWED_EXTENSIONS):
+    filename = PurePosixPath((filename or "").replace("\\", "/")).name
+    extension = PurePosixPath(filename).suffix.lower()
+    if extension not in allowed or len(filename) > 255 or any(ord(c) < 32 for c in filename):
+        status = 415 if allowed == SCAN_EXTENSIONS else 422
+        raise APIError(
+            status,
+            "UNSUPPORTED_TYPE" if status == 415 else "VALIDATION_ERROR",
+            "허용되지 않는 파일 형식입니다.",
+        )
+    return filename, extension
 
 
-class AssistInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    message: str = Field(default="", max_length=2000)
-    context: AssistContext
-
-
-class AssistOption(BaseModel):
-    action: Literal["MASK", "DELETE", "CANCEL"]
-    targets: list[DetectionType]
-    label: str
-
-
-class AssistResult(BaseModel):
-    action: Literal["MASK", "DELETE", "CANCEL", "CLARIFY"]
-    targets: list[DetectionType]
-    reply: str
-    options: list[AssistOption]
-
-
-class ScanResult(BaseModel):
-    blocked: bool
-    findings: list[Finding]
-
-
-class FileScanResult(ScanResult):
-    filename: str
-
-
-class TransferResult(BaseModel):
-    id: str
-    url: str
-    download_url: str
-    qr: str
-    expires_at: str
-
-
-class ErrorDetail(BaseModel):
-    code: str
-    message: str
-
-
-class ErrorResult(BaseModel):
-    error: ErrorDetail
-
-
-class UnscannedResult(ErrorResult):
-    confirmation_required: bool
-    scan_supported: bool
-
-
-class SensitiveResult(ErrorResult, ScanResult):
-    confirmation_required: bool
-    sanitize_available: bool
-
-
-class LogInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    event: Literal["BLOCK"]
-    types: list[DetectionType] = Field(min_length=1, max_length=len(TYPES))
-    source: Literal["web", "extension"]
-
-
-class BodyLimitMiddleware:
-    """Bound chunked requests too, before multipart parsing creates temporary files."""
-
-    def __init__(self, app, limit: int, scan_limit: int):
-        self.app, self.limit, self.scan_limit = app, limit, scan_limit
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["method"] not in ("POST", "PUT", "PATCH"):
-            return await self.app(scope, receive, send)
-        body = bytearray()
-        limit = self.scan_limit if scope["path"].rstrip("/") == "/api/scan/file" else self.limit
-        while True:
-            message = await receive()
-            if message["type"] == "http.disconnect":
-                return
-            body.extend(message.get("body", b""))
-            if len(body) > limit:
-                response = JSONResponse(
-                    {
-                        "error": {
-                            "code": "FILE_TOO_LARGE",
-                            "message": "요청 크기 제한을 초과했습니다.",
-                        }
-                    },
-                    status_code=413,
-                )
-                return await response(scope, receive, send)
-            if not message.get("more_body", False):
-                break
-
-        delivered = False
-
-        async def replay():
-            nonlocal delivered
-            if not delivered:
-                delivered = True
-                return {"type": "http.request", "body": bytes(body), "more_body": False}
-            return await receive()
-
-        await self.app(scope, replay, send)
-
-
-def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
+def create_app(settings: Settings | None = None, storage=None, store=None):
     settings = settings or Settings()
-    store = Store(settings.database_path)
+    store = store or Store(settings)
     storage = storage or Storage(settings)
-    drafts = Drafts(settings.sanitize_ttl_sec, settings.sanitize_memory_mb * 1024 * 1024)
-
-    @asynccontextmanager
-    async def lifespan(app):
-        async def expire_drafts():
-            while True:
-                await asyncio.sleep(min(1, settings.sanitize_ttl_sec))
-                drafts.purge()
-
-        task = asyncio.create_task(expire_drafts())
-        try:
-            yield
-        finally:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            drafts.clear()
-
     app = FastAPI(
         title="SecureDrop Cloud",
-        version="0.2.0",
-        lifespan=lifespan,
-        description="민감정보 탐지·정제 및 QR 전송 API. 플러그인은 /plugin/openapi.json을 사용합니다.",
-        responses={
-            code: {"model": ErrorResult}
-            for code in (401, 403, 404, 410, 413, 415, 422, 429, 500, 502, 503)
-        },
+        version="1.3.0",
+        root_path=settings.root_path,
         middleware=[
             Middleware(
                 CORSMiddleware,
                 allow_origins=settings.allowed_origins,
                 allow_methods=["GET", "POST", "DELETE"],
-                allow_headers=["Content-Type", "X-API-Key", "X-Source"],
+                allow_headers=[
+                    "Content-Type",
+                    "X-API-Key",
+                    "X-Source",
+                    "X-Manage-Token",
+                    "Authorization",
+                ],
             ),
             Middleware(
                 BodyLimitMiddleware,
-                limit=settings.max_file_mb * 1024 * 1024 + 65_536,
-                scan_limit=settings.scan_file_max_mb * 1024 * 1024 + 65_536,
+                limit=settings.scan_file_max_mb * 1024 * 1024 + 65536,
+                scan_limit=settings.scan_file_max_mb * 1024 * 1024 + 65536,
             ),
         ],
     )
     app.router.route_class = MemoryUploadRoute
-    app.state.store = store
-    app.state.storage = storage
-    app.state.settings = settings
-    app.state.drafts = drafts
-    frontend = Path(__file__).resolve().parent / "frontend"
-    app.mount("/static", StaticFiles(directory=frontend), name="static")
-
-    @app.get("/", include_in_schema=False)
-    def frontend_index():
-        return FileResponse(frontend / "index.html")
-
-    key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-    def authenticate(request: Request, api_key: Annotated[str | None, Depends(key_header)]):
-        declared_source = request.headers.get("X-Source", "web")
-        if api_key is not None:
-            expected = settings.plugin_api_key.get_secret_value()
-            if not expected or not hmac.compare_digest(api_key.encode(), expected.encode()):
-                raise APIError(401, "UNAUTHORIZED", "유효한 API Key가 필요합니다.")
-            identity = hashlib.sha256(api_key.encode()).hexdigest()
-            if not store.allow_plugin(identity, time.time()):
-                raise APIError(429, "RATE_LIMITED", "분당 30회 호출 한도를 초과했습니다.")
-            request.state.source = "plugin"
-        elif (
-            request.url.path.startswith("/plugin/")
-            or declared_source == "plugin"
-            or request.headers.get("origin") not in settings.allowed_origins
-        ):
-            raise APIError(401, "UNAUTHORIZED", "허용된 웹 출처 또는 API Key가 필요합니다.")
-        else:
-            if declared_source not in ("web", "extension"):
-                raise APIError(422, "VALIDATION_ERROR", "X-Source 값이 올바르지 않습니다.")
-            request.state.source = declared_source
-
-    auth = Depends(authenticate)
+    app.state.store, app.state.storage, app.state.settings = store, storage, settings
 
     @app.exception_handler(APIError)
     async def api_error(request, exc):
-        headers = {"Retry-After": "60"} if exc.status == 429 else None
         return JSONResponse(
-            {"error": {"code": exc.code, "message": exc.message}},
-            status_code=exc.status,
-            headers=headers,
+            {"error": {"code": exc.code, "message": exc.message}}, status_code=exc.status
         )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
-        # FastAPI's default detail contains the submitted input. Never echo it.
         return JSONResponse(
             {
                 "error": {
@@ -315,67 +200,174 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
 
     @app.middleware("http")
     async def privacy_headers(request, call_next):
+        request.state.request_id = uuid4().hex
+        start = time.monotonic()
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers.update(
+            {
+                "Cache-Control": "no-store",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            }
+        )
+        route = request.scope.get("route")
+        # Route templates avoid logging transfer IDs, tokens, queries or user input.
+        logger.info(
+            json.dumps(
+                {
+                    "request_id": request.state.request_id,
+                    "path": getattr(route, "path", "unmatched"),
+                    "status": response.status_code,
+                    "latency_ms": round((time.monotonic() - start) * 1000),
+                }
+            )
+        )
         return response
+
+    def event(request, kind, types, source="web"):
+        store.log(kind, types, source, request.state.request_id)
+        metrics = {"BLOCK": "BlockedCount", "TRANSFER": "TransferCount"}
+        if kind in metrics:
+            metric = metrics[kind]
+            for detection in sorted(set(types)) or ["NONE"]:
+                logger.info(
+                    json.dumps(
+                        {
+                            "_aws": {
+                                "Timestamp": int(time.time() * 1000),
+                                "CloudWatchMetrics": [
+                                    {
+                                        "Namespace": "SecureDrop",
+                                        "Dimensions": [["Type", "Source"]],
+                                        "Metrics": [{"Name": metric, "Unit": "Count"}],
+                                    }
+                                ],
+                            },
+                            "Type": detection,
+                            "Source": source,
+                            metric: 1,
+                            "request_id": request.state.request_id,
+                            "event": kind,
+                        }
+                    )
+                )
+
+    def expires(value):
+        value = settings.default_expires_sec if value is None else value
+        if value not in (300, 600, 3600) or value > settings.max_expires_sec:
+            raise APIError(422, "VALIDATION_ERROR", "만료 시간은 300, 600, 3600초 중 선택하세요.")
+        return value
+
+    async def read_file(file):
+        content = await file.read(settings.scan_file_max_mb * 1024 * 1024 + 1)
+        if len(content) > settings.scan_file_max_mb * 1024 * 1024:
+            raise APIError(413, "FILE_TOO_LARGE", "파일은 최대 4MiB입니다.")
+        if not content:
+            raise APIError(422, "VALIDATION_ERROR", "빈 파일은 처리할 수 없습니다.")
+        return content
+
+    def save_session(kind, content, result):
+        identifier = secrets.token_hex(16)
+        digest = hashlib.sha256(content).hexdigest()
+        deadline = now() + timedelta(seconds=settings.session_ttl_sec)
+        store.put(
+            "sessions",
+            {
+                "session_id": identifier,
+                "kind": kind,
+                "sha256": digest,
+                "findings": result["findings"],
+                "clean": not result["blocked"],
+                "supported": True,
+                "expires_at": deadline.isoformat(),
+                "ttl": int(deadline.timestamp()),
+            },
+        )
+        return identifier, digest
+
+    def get_session(identifier, kind):
+        row = store.get("sessions", {"session_id": identifier})
+        if (
+            not row
+            or int(row["ttl"]) <= int(now().timestamp())
+            or datetime.fromisoformat(row["expires_at"]) <= now()
+        ):
+            raise APIError(410, "EXPIRED", "검사·정제 세션이 만료되었습니다.")
+        if row["kind"] != kind:
+            raise APIError(422, "VALIDATION_ERROR", "검사·정제 참조가 올바르지 않습니다.")
+        return row
+
+    def get_transfer(identifier, request=None, active=False):
+        row = store.transfer(identifier)
+        if not row:
+            raise APIError(404, "NOT_FOUND", "전송을 찾을 수 없습니다.")
+        if request is not None and not hmac.compare_digest(
+            row["manage_hash"], token_hash(request.headers.get("X-Manage-Token", ""))
+        ):
+            raise APIError(403, "FORBIDDEN", "해당 전송의 관리 토큰이 필요합니다.")
+        if row["status"] == "REVOKED":
+            raise APIError(404, "NOT_FOUND", "전송을 찾을 수 없습니다.")
+        if active:
+            if datetime.fromisoformat(row["expires_at"]) <= now():
+                raise APIError(410, "EXPIRED", "만료된 전송입니다.")
+            if row["status"] != "ACTIVE":
+                raise APIError(409, "UPLOAD_INCOMPLETE", "업로드가 완료되지 않았습니다.")
+        return row
+
+    def public_status(row):
+        return {
+            "id": row["transfer_id"],
+            "status": row["status"],
+            "expires_at": row["expires_at"],
+            "download_count": int(row["download_count"]),
+        }
+
+    def share(row, request):
+        base = str(settings.public_base_url or request.base_url).rstrip("/")
+        url = f"{base}/d.html?id={row['transfer_id']}"
+        return {**public_status(row), "share_url": url, "qr": qr_data(url)}
+
+    def revoke(row, request, source):
+        # Revoke first: a concurrent /complete may never reactivate the record.
+        if row["status"] != "REVOKED":
+            store.transition(row["transfer_id"], row["status"], "REVOKED")
+            event(request, "REVOKE", [], source)
+        for item in row["files"]:
+            storage.delete(item["s3_key"])
+        return {"id": row["transfer_id"], "status": "REVOKED"}
 
     @app.get("/api/health")
     def health():
         return {"status": "ok", "region": settings.aws_region}
 
-    @app.post("/api/scan", response_model=ScanResult, operation_id="scan_text", dependencies=[auth])
-    @app.post(
-        "/plugin/scan",
-        response_model=ScanResult,
-        operation_id="plugin_scan_text",
-        dependencies=[auth],
-    )
-    def scan_text(payload: ScanInput):
-        return scan(payload.text)
+    @app.post("/api/scan", response_model=ScanResult)
+    def scan_text(payload: ScanInput, request: Request):
+        result = scan(payload.text)
+        event(request, "SCAN", [f["type"] for f in result["findings"]])
+        return result
 
-    def validate_filename(filename, allowed=ALLOWED_EXTENSIONS):
-        filename = PurePosixPath((filename or "").replace("\\", "/")).name
-        extension = PurePosixPath(filename).suffix.lower()
-        if extension not in allowed or any(ord(c) < 32 for c in filename):
-            status = 415 if allowed == SCAN_EXTENSIONS else 422
-            code = "UNSUPPORTED_TYPE" if status == 415 else "VALIDATION_ERROR"
-            raise APIError(status, code, "허용되지 않는 파일 형식입니다.")
-        return filename, extension
-
-    async def read_file(file, max_mb=None):
-        max_mb = settings.max_file_mb if max_mb is None else max_mb
-        content = await file.read(max_mb * 1024 * 1024 + 1)
-        if len(content) > max_mb * 1024 * 1024:
-            raise APIError(413, "FILE_TOO_LARGE", f"파일 크기는 최대 {max_mb}MiB입니다.")
-        if not content:
-            raise APIError(422, "VALIDATION_ERROR", "빈 파일은 처리할 수 없습니다.")
-        return content
-
-    @app.post("/api/scan/file", response_model=FileScanResult, dependencies=[auth])
-    async def scan_uploaded_file(file: Annotated[UploadFile, File()]):
+    @app.post("/api/scan/file", response_model=FileScanResult)
+    async def scan_uploaded_file(request: Request, file: Annotated[UploadFile, File()]):
         try:
             filename, _ = validate_filename(file.filename, SCAN_EXTENSIONS)
-            content = await read_file(file, settings.scan_file_max_mb)
+            content = await read_file(file)
             result = await run_in_threadpool(scan_file, decode_text(content))
-            return {"filename": filename, **result}
+            identifier, digest = await run_in_threadpool(save_session, "SCAN", content, result)
+            await run_in_threadpool(event, request, "SCAN", [f["type"] for f in result["findings"]])
+            return {"filename": filename, "scan_id": identifier, "sha256": digest, **result}
         finally:
             await file.close()
 
-    @app.post("/api/assist", response_model=AssistResult, dependencies=[auth])
+    @app.post("/api/assist", response_model=AssistResult)
     def assist(payload: AssistInput):
-        return interpret(
-            payload.message, [finding.model_dump() for finding in payload.context.findings]
-        )
+        return interpret(payload.message, [f.model_dump() for f in payload.context.findings])
 
-    @app.post("/api/sanitize", response_model=SanitizeResult, dependencies=[auth])
+    @app.post("/api/sanitize", response_model=SanitizeResult)
     async def sanitize_file(
-        request: Request,
-        file: Annotated[UploadFile, File()],
-        actions: Annotated[str, Form()],
+        request: Request, file: Annotated[UploadFile, File()], actions: Annotated[str, Form()]
     ):
         try:
-            filename, _ = validate_filename(file.filename, SCAN_EXTENSIONS)
+            validate_filename(file.filename, SCAN_EXTENSIONS)
             try:
                 parsed = TypeAdapter(list[SanitizeAction]).validate_json(actions)
             except ValidationError as exc:
@@ -408,209 +400,396 @@ def create_app(settings: Settings | None = None, storage=None) -> FastAPI:
                     "cancelled": True,
                 }
             processed = await run_in_threadpool(sanitize, text, selected)
-            after = await run_in_threadpool(scan_file, processed)
             processed_bytes = processed.encode("utf-8")
-            if len(processed_bytes) > settings.max_file_mb * 1024 * 1024:
-                raise APIError(413, "FILE_TOO_LARGE", "UTF-8 처리본 크기 제한을 초과했습니다.")
-            identifier = drafts.add(processed_bytes, filename)
-            try:
-                await run_in_threadpool(store.log, "SANITIZE", list(selected), request.state.source)
-            except Exception:
-                drafts.finish(identifier, True)
-                raise
+            if len(processed_bytes) > settings.scan_file_max_mb * 1024 * 1024:
+                raise APIError(413, "FILE_TOO_LARGE", "UTF-8 처리본은 최대 4MiB입니다.")
+            after = await run_in_threadpool(scan_file, processed)
+            identifier, digest = await run_in_threadpool(
+                save_session, "SANITIZE", processed_bytes, after
+            )
+            await run_in_threadpool(event, request, "SANITIZE", list(selected))
             return {
                 "sanitize_id": identifier,
+                "sha256": digest,
+                "content_b64": base64.b64encode(processed_bytes).decode(),
                 "findings_before": before["findings"],
                 "findings_after": after["findings"],
-                "preview": "\n".join(processed.splitlines()[:20])[:10_000],
+                "preview": "\n".join(processed.splitlines()[:20])[:10000],
                 "clean": not after["blocked"],
             }
         finally:
             await file.close()
 
-    @app.delete("/api/sanitize/{identifier}", dependencies=[auth])
-    def cancel_draft(identifier: str):
-        drafts.checkout(identifier)
-        drafts.finish(identifier, True)
-        return {"status": "cancelled"}
-
-    @app.post(
-        "/api/transfers",
-        response_model=TransferResult,
-        operation_id="create_transfer",
-        dependencies=[auth],
-        responses={409: {"model": SensitiveResult}, 415: {"model": UnscannedResult}},
-    )
-    @app.post(
-        "/plugin/transfers",
-        response_model=TransferResult,
-        operation_id="plugin_create_transfer",
-        dependencies=[auth],
-        responses={409: {"model": SensitiveResult}, 415: {"model": UnscannedResult}},
-    )
-    async def create_transfer(
-        request: Request,
-        file: Annotated[UploadFile | None, File()] = None,
-        sanitize_id: Annotated[str | None, Form()] = None,
-        expires_in: Annotated[int | None, Form()] = None,
-        confirm_sensitive: Annotated[bool, Form()] = False,
-        confirm_unscanned: Annotated[bool, Form()] = False,
-        user_approved: Annotated[bool, Form()] = False,
-    ):
-        """플러그인과 처리본 전송은 미리보기 등 사용자 확인 후 user_approved=true가 필요합니다."""
-        checked_out = False
-        success = False
-        try:
-            expires = settings.default_expires_sec if expires_in is None else expires_in
-            if expires not in (300, 600, 3600) or expires > settings.max_expires_sec:
-                raise APIError(
-                    422, "VALIDATION_ERROR", "만료 시간은 300, 600, 3600초 중 선택하세요."
-                )
-            if request.state.source == "plugin" and not user_approved:
-                raise APIError(
-                    403, "APPROVAL_REQUIRED", "전송 전 사용자의 명시적 승인이 필요합니다."
-                )
-            if (file is None) == (sanitize_id is None):
-                raise APIError(
-                    422, "VALIDATION_ERROR", "file 또는 sanitize_id 중 하나만 지정하세요."
-                )
-            if sanitize_id is not None:
-                if not user_approved:
-                    raise APIError(
-                        403, "APPROVAL_REQUIRED", "처리본 미리보기 확인 후 승인이 필요합니다."
-                    )
-                draft = drafts.checkout(sanitize_id)
-                checked_out = True
-                filename, extension = validate_filename(draft.filename)
-                content = draft.content
-                if len(content) > settings.max_file_mb * 1024 * 1024:
-                    raise APIError(413, "FILE_TOO_LARGE", "처리본 크기 제한을 초과했습니다.")
-            else:
-                filename, extension = validate_filename(file.filename)
-                content = await read_file(file)
-            findings = []
-            if extension not in SCAN_EXTENSIONS and not confirm_unscanned:
-                return JSONResponse(
-                    {
-                        "error": {
-                            "code": "UNSUPPORTED_TYPE",
-                            "message": "이 형식은 민감정보 검사를 지원하지 않습니다. 확인 후 전송하세요.",
-                        },
-                        "confirmation_required": True,
-                        "scan_supported": False,
-                    },
-                    status_code=415,
-                )
+    @app.post("/api/transfers")
+    def create_transfer(payload: TransferInput, request: Request):
+        duration = expires(payload.expires_in)
+        if len(payload.files) > settings.max_files_per_transfer:
+            raise APIError(422, "VALIDATION_ERROR", "파일 개수 제한을 초과했습니다.")
+        if sum(item.size for item in payload.files) > settings.max_file_mb * 1024 * 1024:
+            raise APIError(413, "FILE_TOO_LARGE", "전송 파일은 합계 20MiB 이하여야 합니다.")
+        identifier = secrets.token_hex(16)
+        items, references = [], []
+        for i, item in enumerate(payload.files):
+            name, extension = validate_filename(item.name)
+            scan_id = item.scan_id or payload.scan_id
+            sanitize_id = item.sanitize_id or payload.sanitize_id
+            reference = sanitize_id or scan_id
+            session = (
+                get_session(reference, "SANITIZE" if sanitize_id else "SCAN") if reference else None
+            )
             if extension in SCAN_EXTENSIONS:
-                text = decode_text(content)
-                result = await run_in_threadpool(scan_file, text)
-                findings = [item["type"] for item in result["findings"]]
-                if result["blocked"] and not confirm_sensitive:
-                    await run_in_threadpool(store.log, "BLOCK", findings, request.state.source)
-                    return JSONResponse(
-                        {
-                            "error": {
-                                "code": "SENSITIVE_REMAINS" if sanitize_id else "SENSITIVE_DATA",
-                                "message": "민감정보가 감지되었습니다. 정제하거나 위험을 확인한 후 다시 전송하세요.",
-                            },
-                            **result,
-                            "confirmation_required": True,
-                            "sanitize_available": extension in SCAN_EXTENSIONS,
-                        },
-                        status_code=409,
-                    )
-            identifier = uuid4().hex
-            key = f"transfers/{identifier}"
-            # Start the deadline before signing, so the status never outlives the signed URL.
-            expires_at = (now() + timedelta(seconds=expires)).isoformat()
-            url = await run_in_threadpool(storage.create, key, content, filename, expires)
-            try:
-                if settings.public_base_url:
-                    download_url = f"{str(settings.public_base_url).rstrip('/')}/d/{identifier}"
-                else:
-                    download_url = str(request.url_for("download_transfer", identifier=identifier))
-                qr = await run_in_threadpool(qr_data, download_url)
-                await run_in_threadpool(
-                    store.save_transfer, identifier, key, expires_at, findings, request.state.source
+                if session is None:
+                    raise APIError(422, "VALIDATION_ERROR", "검사 또는 정제 참조가 필요합니다.")
+            elif not payload.acknowledge_unsupported:
+                raise APIError(
+                    422, "VALIDATION_ERROR", "검사 미지원 형식에 대한 확인이 필요합니다."
                 )
-            except Exception:
-                await run_in_threadpool(storage.delete, key)
-                raise
-            success = True
-            return {
-                "id": identifier,
-                "url": url,
-                "download_url": download_url,
-                "qr": qr,
-                "expires_at": expires_at,
-            }
-        finally:
-            if checked_out:
-                drafts.finish(sanitize_id, success)
-            if file is not None:
-                await file.close()
-
-    def get_transfer(identifier):
-        row = store.transfer(identifier)
-        if row is None or row["revoked"]:
-            raise APIError(404, "NOT_FOUND", "전송을 찾을 수 없습니다.")
-        return row
-
-    @app.get("/d/{identifier}", include_in_schema=False)
-    def download_transfer(identifier: str):
-        # The random 128-bit ID is a bearer capability, like the S3 URL itself.
-        row = get_transfer(identifier)
-        remaining = int((datetime.fromisoformat(row["expires_at"]) - now()).total_seconds())
-        if remaining <= 0:
-            raise APIError(410, "EXPIRED", "만료된 전송입니다.")
-        url = storage.download_url(row["object_key"], remaining)
-        return RedirectResponse(url, status_code=302, headers={"Referrer-Policy": "no-referrer"})
-
-    @app.get("/api/transfers/{identifier}", dependencies=[auth])
-    def transfer_status(identifier: str):
-        row = get_transfer(identifier)
-        if datetime.fromisoformat(row["expires_at"]) <= now():
-            raise APIError(410, "EXPIRED", "만료된 전송입니다.")
+            if sanitize_id and not payload.user_approved:
+                raise APIError(422, "VALIDATION_ERROR", "처리본 미리보기 승인이 필요합니다.")
+            if session and not session["clean"] and not payload.acknowledge_risk:
+                event(request, "BLOCK", [f["type"] for f in session["findings"]])
+                raise APIError(
+                    409, "SENSITIVE_REMAINS", "민감정보 정제 또는 위험 확인이 필요합니다."
+                )
+            digest = item.sha256.lower()
+            if session and not payload.encrypted and digest != session["sha256"]:
+                raise APIError(
+                    409, "INTEGRITY_MISMATCH", "검사·정제 결과 해시가 일치하지 않습니다."
+                )
+            items.append(
+                {
+                    "name": name,
+                    "size": item.size,
+                    "type": item.type,
+                    "sha256": digest,
+                    "s3_key": f"transfers/{identifier}/{i}",
+                }
+            )
+            references.append(reference or "")
+        uploads = [storage.upload_post(item) for item in items]
+        token, hashed = new_token()
+        created = now()
+        deadline = created + timedelta(seconds=duration)
+        store.put(
+            "transfers",
+            {
+                "transfer_id": identifier,
+                "manage_hash": hashed,
+                "status": "PENDING_UPLOAD",
+                "files": items,
+                "encrypted": payload.encrypted,
+                "source": "web",
+                "scan_ref": references,
+                "created_at": created.isoformat(),
+                "created_day": created.date().isoformat(),
+                "expires_at": deadline.isoformat(),
+                "upload_expires_at": (
+                    created + timedelta(seconds=settings.upload_url_ttl_sec)
+                ).isoformat(),
+                "download_count": 0,
+                "ttl": int((created + timedelta(hours=1)).timestamp()),
+            },
+        )
         return {
             "id": identifier,
-            "status": "active",
-            "expires_at": row["expires_at"],
-            "downloaded": False,
+            "manage_token": token,
+            "status": "PENDING_UPLOAD",
+            "uploads": uploads,
+            "upload_expires_in": settings.upload_url_ttl_sec,
+            "expires_at": deadline.isoformat(),
         }
 
-    @app.delete("/api/transfers/{identifier}", dependencies=[auth])
-    def revoke_transfer(identifier: str, request: Request):
-        row = get_transfer(identifier)
-        storage.delete(row["object_key"])
-        store.revoke(identifier, request.state.source)
-        return {"id": identifier, "status": "revoked"}
+    @app.post("/api/transfers/{identifier}/complete")
+    def complete_transfer(identifier: str, request: Request):
+        row = get_transfer(identifier, request)
+        if datetime.fromisoformat(row["expires_at"]) <= now():
+            raise APIError(410, "EXPIRED", "만료된 전송입니다.")
+        if row["status"] == "ACTIVE":
+            return share(row, request)
+        if datetime.fromisoformat(row["upload_expires_at"]) <= now():
+            raise APIError(410, "EXPIRED", "업로드 유효 시간이 지났습니다.")
+        try:
+            for item in row["files"]:
+                storage.verify(item)
+        except APIError as exc:
+            if exc.code == "INTEGRITY_MISMATCH":
+                revoke(row, request, row["source"])
+            raise
+        row = store.transition(
+            identifier,
+            "PENDING_UPLOAD",
+            "ACTIVE",
+            ttl=int(datetime.fromisoformat(row["expires_at"]).timestamp()) + 86400,
+        )
+        event(request, "TRANSFER", [], row["source"])
+        return share(row, request)
 
-    @app.post("/api/logs", dependencies=[auth])
-    def create_log(payload: LogInput, request: Request):
-        source = request.state.source
-        if source == "plugin" or payload.source != source:
-            raise APIError(422, "VALIDATION_ERROR", "로그 출처가 요청 출처와 일치하지 않습니다.")
-        store.log(payload.event, list(payload.types), source)
+    @app.get("/api/transfers/{identifier}")
+    def transfer_status(identifier: str, request: Request):
+        row = get_transfer(identifier, request)
+        if datetime.fromisoformat(row["expires_at"]) <= now():
+            raise APIError(410, "EXPIRED", "만료된 전송입니다.")
+        return public_status(row)
+
+    @app.delete("/api/transfers/{identifier}")
+    def revoke_transfer(identifier: str, request: Request):
+        # Allow retries after a failed S3 delete, including already revoked rows.
+        row = store.transfer(identifier)
+        if not row:
+            raise APIError(404, "NOT_FOUND", "전송을 찾을 수 없습니다.")
+        if not hmac.compare_digest(
+            row["manage_hash"], token_hash(request.headers.get("X-Manage-Token", ""))
+        ):
+            raise APIError(403, "FORBIDDEN", "해당 전송의 관리 토큰이 필요합니다.")
+        return revoke(row, request, "web")
+
+    @app.get("/api/d/{identifier}")
+    def download_transfer(identifier: str, request: Request):
+        row = get_transfer(identifier, active=True)
+        remaining = int((datetime.fromisoformat(row["expires_at"]) - now()).total_seconds())
+        if remaining < 1:
+            raise APIError(410, "EXPIRED", "만료된 전송입니다.")
+        files = [
+            {
+                "name": item["name"],
+                "size": int(item["size"]),
+                "url": storage.download_url(item, min(settings.download_url_ttl_sec, remaining)),
+            }
+            for item in row["files"]
+        ]
+        store.count_download(identifier)
+        event(request, "DOWNLOAD", [], row["source"])
+        return {"files": files, "encrypted": row["encrypted"], "expires_at": row["expires_at"]}
+
+    @app.post("/api/ext/logs")
+    def extension_log(payload: LogInput, request: Request):
+        event(request, "BLOCK", payload.types, "extension")
         return {"ok": True}
 
-    @app.get("/api/logs", dependencies=[auth])
-    def get_logs(limit: Annotated[int, Query(ge=1, le=100)] = 50):
-        return {"items": store.logs(limit)}
+    bearer = HTTPBearer(auto_error=False)
 
-    @app.get("/plugin/openapi.json", include_in_schema=False)
-    def plugin_schema():
-        schema = get_openapi(title="SecureDrop plugin", version="0.2.0", routes=app.routes)
+    def administrator(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+        row = (
+            store.get("admin_sessions", {"token_hash": token_hash(credentials.credentials)})
+            if credentials
+            else None
+        )
+        if not row or datetime.fromisoformat(row["expires_at"]) <= now():
+            raise APIError(401, "UNAUTHORIZED", "유효한 관리자 세션이 필요합니다.")
+        return row
+
+    @app.post("/api/admin/login")
+    def login(payload: LoginInput):
+        # Retry optimistic conflicts so concurrent failures are all counted.
+        for _ in range(10):
+            admin = store.get("admins", {"username": payload.username})
+            if admin and int(admin.get("locked_until", 0)) > int(now().timestamp()):
+                raise APIError(423, "ACCOUNT_LOCKED", "계정이 잠겼습니다. 15분 후 다시 시도하세요.")
+            stored = admin["password_hash"] if admin else password_hash("dummy-password")
+            valid = verify_password(payload.password, stored) and admin is not None
+            if admin:
+                try:
+                    locked = store.login_update(admin, valid)
+                except APIError as exc:
+                    if exc.code == "STATE_CONFLICT":
+                        continue
+                    raise
+                if locked:
+                    raise APIError(
+                        423, "ACCOUNT_LOCKED", "계정이 잠겼습니다. 15분 후 다시 시도하세요."
+                    )
+            if not valid:
+                raise APIError(401, "UNAUTHORIZED", "아이디 또는 비밀번호를 확인하세요.")
+            token, hashed = new_token()
+            deadline = now() + timedelta(seconds=settings.admin_session_ttl_sec)
+            store.put(
+                "admin_sessions",
+                {
+                    "token_hash": hashed,
+                    "username": payload.username,
+                    "created_at": now().isoformat(),
+                    "expires_at": deadline.isoformat(),
+                    "ttl": int(deadline.timestamp()),
+                },
+            )
+            return {"token": token, "expires_at": deadline.isoformat()}
+        raise APIError(429, "RATE_LIMITED", "잠시 후 다시 시도하세요.")
+
+    admin_router = APIRouter(prefix="/api/admin", dependencies=[Depends(administrator)])
+
+    @admin_router.post("/logout")
+    def logout(session: Annotated[dict, Depends(administrator)]):
+        store.delete("admin_sessions", {"token_hash": session["token_hash"]})
+        return {"ok": True}
+
+    @admin_router.get("/stats")
+    def stats(days: Annotated[int, Query(ge=1, le=7)] = 1):
+        rows = []
+        for offset in range(days):
+            rows.extend(
+                store.query_day("events", (now().date() - timedelta(days=offset)).isoformat())
+            )
+        return {
+            "by_event": dict(Counter(row["event"] for row in rows)),
+            "by_type": dict(Counter(kind for row in rows for kind in row["types"])),
+            "by_source": dict(Counter(row["source"] for row in rows)),
+        }
+
+    @admin_router.get("/events")
+    def events(limit: Annotated[int, Query(ge=1, le=100)] = 50, day: date | None = None):
+        rows = store.query_day("events", (day or now().date()).isoformat(), limit)
+        return {
+            "items": [
+                {key: row[key] for key in ("time", "event", "types", "source", "request_id")}
+                for row in rows
+            ]
+        }
+
+    @admin_router.get("/transfers")
+    def transfers(
+        status: Literal["ACTIVE", "PENDING_UPLOAD", "REVOKED"] | None = "ACTIVE",
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ):
+        rows = []
+        # Maximum transfer lifetime is one hour; yesterday covers midnight.
+        for offset in range(2):
+            rows.extend(
+                store.query_day("transfers", (now().date() - timedelta(days=offset)).isoformat())
+            )
+        rows.sort(key=lambda row: row["created_at"], reverse=True)
+        return {
+            "items": [
+                {
+                    "id": row["transfer_id"],
+                    "display_id": row["transfer_id"][:8],
+                    "size": sum(int(f["size"]) for f in row["files"]),
+                    "created_at": row["created_at"],
+                    "encrypted": row["encrypted"],
+                    **public_status(row),
+                }
+                for row in rows
+                if (status is None or row["status"] == status)
+                and datetime.fromisoformat(row["expires_at"]) > now()
+            ][:limit]
+        }
+
+    @admin_router.delete("/transfers/{identifier}")
+    def admin_revoke(identifier: str, request: Request):
+        row = store.transfer(identifier)
+        if not row:
+            raise APIError(404, "NOT_FOUND", "전송을 찾을 수 없습니다.")
+        return revoke(row, request, "admin")
+
+    app.include_router(admin_router)
+
+    key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+    def plugin_key(request: Request, key: Annotated[str | None, Depends(key_header)]):
+        # REST API Gateway validates the key and applies its usage plan. Do not
+        # trust a caller-supplied header when invoking the ASGI app directly.
+        identity = request.scope.get("aws.event", {}).get("requestContext", {}).get("identity", {})
+        if not key or not identity.get("apiKeyId"):
+            raise APIError(401, "UNAUTHORIZED", "API Gateway의 유효한 API Key가 필요합니다.")
+
+    @app.post(
+        "/api/plugin/scan",
+        response_model=ScanResult,
+        dependencies=[Depends(plugin_key)],
+        operation_id="scan_text",
+    )
+    def plugin_scan(payload: ScanInput, request: Request):
+        result = scan(payload.text)
+        event(request, "SCAN", [f["type"] for f in result["findings"]], "plugin")
+        return result
+
+    @app.post(
+        "/api/plugin/transfers",
+        dependencies=[Depends(plugin_key)],
+        operation_id="create_transfer",
+        openapi_extra={
+            "requestBody": {
+                "content": {"application/json": {"schema": PluginTextInput.model_json_schema()}}
+            }
+        },
+    )
+    async def plugin_transfer(
+        request: Request,
+        file: Annotated[UploadFile | None, File()] = None,
+        expires_in: Annotated[int | None, Form()] = None,
+        user_approved: Annotated[bool, Form()] = False,
+    ):
+        # Support the PRD's JSON text alternative as well as multipart file.
+        if request.headers.get("content-type", "").split(";", 1)[0] == "application/json":
+            try:
+                payload = PluginTextInput.model_validate(await request.json())
+            except (ValidationError, ValueError) as exc:
+                raise APIError(422, "VALIDATION_ERROR", "요청 형식을 확인하세요.") from exc
+            content, name, content_type = payload.text.encode(), "message.txt", "text/plain"
+            expires_in, user_approved = payload.expires_in, payload.user_approved
+        elif file:
+            try:
+                name, _ = validate_filename(file.filename, SCAN_EXTENSIONS)
+                content = await read_file(file)
+                content_type = "text/plain" if name.lower().endswith(".txt") else "text/csv"
+            finally:
+                await file.close()
+        else:
+            raise APIError(422, "VALIDATION_ERROR", "파일 또는 텍스트가 필요합니다.")
+        if not user_approved:
+            raise APIError(422, "VALIDATION_ERROR", "전송 전 사용자 승인이 필요합니다.")
+        duration = expires(expires_in)
+        if not content:
+            raise APIError(422, "VALIDATION_ERROR", "빈 텍스트는 전송할 수 없습니다.")
+        result = await run_in_threadpool(scan_file, decode_text(content))
+        if result["blocked"]:
+            await run_in_threadpool(
+                event, request, "BLOCK", [f["type"] for f in result["findings"]], "plugin"
+            )
+            raise APIError(409, "SENSITIVE_DETECTED", "민감정보가 탐지되어 전송을 차단했습니다.")
+        identifier = secrets.token_hex(16)
+        token, hashed = new_token()
+        created = now()
+        deadline = created + timedelta(seconds=duration)
+        item = {
+            "name": name,
+            "size": len(content),
+            "type": content_type,
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "s3_key": f"transfers/{identifier}/0",
+        }
+        row = {
+            "transfer_id": identifier,
+            "manage_hash": hashed,
+            "status": "ACTIVE",
+            "files": [item],
+            "encrypted": False,
+            "source": "plugin",
+            "scan_ref": [],
+            "created_at": created.isoformat(),
+            "created_day": created.date().isoformat(),
+            "expires_at": deadline.isoformat(),
+            "download_count": 0,
+            "ttl": int(deadline.timestamp()) + 86400,
+        }
+        await run_in_threadpool(storage.create, item, content)
+        try:
+            await run_in_threadpool(store.put, "transfers", row)
+        except Exception:
+            await run_in_threadpool(storage.delete, item["s3_key"])
+            raise
+        await run_in_threadpool(event, request, "TRANSFER", [], "plugin")
+        return {**share(row, request), "manage_token": token}
+
+    @app.get("/api/plugin/openapi.json", include_in_schema=False)
+    def plugin_schema(request: Request):
+        schema = get_openapi(title="SecureDrop plugin", version="1.3.0", routes=app.routes)
         schema["paths"] = {
             path: value
             for path, value in schema["paths"].items()
-            if path in ("/plugin/scan", "/plugin/transfers")
+            if path in ("/api/plugin/scan", "/api/plugin/transfers")
         }
-        # Only these two operations are exposed to agents; neither lists nor downloads files.
-        for path, operations in schema["paths"].items():
-            operations["post"]["operationId"] = (
-                "scan_text" if path.endswith("scan") else "create_transfer"
-            )
-        return JSONResponse(json.loads(json.dumps(schema)))
+        schema["servers"] = [{"url": str(request.base_url).rstrip("/")}]
+        return schema
 
     return app
 

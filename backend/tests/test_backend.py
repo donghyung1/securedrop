@@ -1,58 +1,86 @@
 import base64
+import hashlib
 import json
-import tempfile
-from dataclasses import replace
 from datetime import timedelta
-from io import BytesIO
-from threading import Event
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import boto3
 import pytest
-import zxingcpp
-from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
+from mangum import Mangum
 from moto import mock_aws
-from PIL import Image
 
+from auth import password_hash, token_hash, verify_password
 from config import Settings
 from detector import scan, scan_file
+from errors import APIError
+from infra.create_tables import create_tables
 from main import create_app
-from store import now
-
-ORIGIN = {"Origin": "http://localhost:5500"}
-KEY = {"X-API-Key": "test-key-only"}
+from store import Store, now
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     with mock_aws():
-        s3 = boto3.client("s3", region_name="ap-northeast-2")
-        s3.create_bucket(
-            Bucket="securedrop-test",
-            CreateBucketConfiguration={"LocationConstraint": "ap-northeast-2"},
-        )
         settings = Settings(
             _env_file=None,
             s3_bucket="securedrop-test",
-            plugin_api_key="test-key-only",
-            database_path=tmp_path / "test.db",
-            max_file_mb=1,
             aws_profile=None,
+            public_base_url="https://demo.example.com",
         )
-        app = create_app(settings)
-        with TestClient(app, raise_server_exceptions=False) as client:
+        s3 = boto3.client("s3", region_name=settings.aws_region)
+        s3.create_bucket(
+            Bucket=settings.s3_bucket,
+            CreateBucketConfiguration={"LocationConstraint": settings.aws_region},
+        )
+        store = Store(settings)
+        create_tables(store)
+        app = create_app(settings, store=store)
+        with TestClient(app, raise_server_exceptions=True) as client:
             yield client, app, s3
 
 
-def upload(client, content=b"hello", filename="sample.txt", **kwargs):
-    headers = kwargs.pop("headers", ORIGIN)
-    return client.post(
-        "/api/transfers", files={"file": (filename, content)}, headers=headers, **kwargs
+def scan_upload(client, content=b"hello", name="sample.txt"):
+    response = client.post("/api/scan/file", files={"file": (name, content)})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def issue(client, content=b"hello", name="sample.txt", **kwargs):
+    result = scan_upload(client, content, name)
+    payload = {
+        "files": [
+            {"name": name, "size": len(content), "type": "text/plain", "sha256": result["sha256"]}
+        ],
+        "scan_id": result["scan_id"],
+        **kwargs,
+    }
+    response = client.post("/api/transfers", json=payload)
+    return response
+
+
+def put(s3, app, issued, content=b"hello", index=0):
+    s3.put_object(
+        Bucket=app.state.settings.s3_bucket,
+        Key=issued["uploads"][index]["fields"]["key"],
+        Body=content,
     )
+
+
+def managed(issued):
+    return {"X-Manage-Token": issued["manage_token"]}
+
+
+def activate(env, content=b"hello"):
+    client, app, s3 = env
+    issued = issue(client, content).json()
+    put(s3, app, issued, content)
+    response = client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued))
+    assert response.status_code == 200, response.text
+    return issued, response.json()
 
 
 @pytest.mark.parametrize(
@@ -72,545 +100,387 @@ def test_detection(text, kind):
     assert text not in str(scan(text))
 
 
-def test_detection_negative_and_counts():
-    assert not scan("일반 문장 900101-1234567 4111-1111-1111-1112")["blocked"]
-    assert scan("010-1234-5678 010-2222-3333")["findings"] == [{"type": "PHONE", "count": 2}]
-    text = " " * 48_995 + "010-1234-5678" + " " * 51_000 + "010-9999-8888"
-    assert scan_file(text)["findings"] == [{"type": "PHONE", "count": 2}]
-
-
-def test_scan_validation_privacy_and_health(env):
+def test_scan_public_and_validation_privacy(env):
     client, _, _ = env
-    assert client.get("/api/health").json() == {"status": "ok", "region": "ap-northeast-2"}
-    assert client.post("/api/scan", json={"text": "hello"}, headers=ORIGIN).json() == {
+    assert client.get("/api/health").json()["status"] == "ok"
+    assert client.post("/api/scan", json={"text": "hello"}).json() == {
         "blocked": False,
         "findings": [],
     }
-    secret = "PRIVATE" * 8000
-    response = client.post("/api/scan", json={"text": secret}, headers=ORIGIN)
+    response = client.post("/api/scan", json={"text": "PRIVATE" * 8000})
     assert response.status_code == 422
     assert "PRIVATE" not in response.text
     assert response.headers["cache-control"] == "no-store"
-    assert client.get("/api/logs", headers=ORIGIN).json() == {"items": []}
+    assert client.get("/api/logs").status_code == 404
 
 
 @pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "cp949"])
-@pytest.mark.parametrize("filename", ["고객정보.csv", "NOTES.TXT"])
-def test_file_scan_shared_rules_and_no_persistence(env, encoding, filename):
-    client, app, s3 = env
-    text = "이름,전화,주민번호\n김,010-1234-5678,900101-1234568\n" * 2
-    response = client.post(
-        "/api/scan/file",
-        headers=ORIGIN,
-        files={"file": (filename, text.encode(encoding))},
-    )
-    assert response.status_code == 200, response.text
-    assert response.json() == {"filename": filename, **scan(text)}
-    assert "010-1234-5678" not in response.text
-    assert "900101-1234568" not in response.text
-    assert response.headers["cache-control"] == "no-store"
-    assert not app.state.drafts.entries
-    assert app.state.store.logs(10) == []
-    assert s3.list_objects_v2(Bucket="securedrop-test")["KeyCount"] == 0
-
-
-def test_file_scan_five_mib_boundary_independent_of_text_and_transfer_limits(env, monkeypatch):
-    client, _, _ = env  # Transfer limit is 1 MiB; file scan still allows 5 MiB.
-
-    def forbidden_rollover(self):
-        raise AssertionError("File scans must stay in memory")
-
-    monkeypatch.setattr(tempfile.SpooledTemporaryFile, "rollover", forbidden_rollover)
-    content = b" " * (5 * 1024 * 1024 - 13) + b"010-1234-5678"
-    response = client.post(
-        "/api/scan/file",
-        headers=ORIGIN,
-        files={"file": ("large.csv", content)},
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["findings"] == [{"type": "PHONE", "count": 1}]
-    response = client.post(
-        "/api/scan/file",
-        headers=ORIGIN,
-        files={"file": ("large.csv", content + b" ")},
-    )
-    assert response.status_code == 413
-    assert response.json()["error"]["code"] == "FILE_TOO_LARGE"
-
-
-@pytest.mark.parametrize(
-    "filename,content,status,code",
-    [
-        ("report.pdf", b"hello", 415, "UNSUPPORTED_TYPE"),
-        ("data.json", b"{}", 415, "UNSUPPORTED_TYPE"),
-        ("empty.txt", b"", 422, "VALIDATION_ERROR"),
-        ("binary.csv", b"\x00secret", 422, "VALIDATION_ERROR"),
-        ("invalid.txt", b"\xff", 422, "VALIDATION_ERROR"),
-    ],
-)
-def test_file_scan_errors(env, filename, content, status, code):
-    client, _, _ = env
-    response = client.post(
-        "/api/scan/file",
-        headers=ORIGIN,
-        files={"file": (filename, content)},
-    )
-    assert response.status_code == status
-    assert response.json()["error"]["code"] == code
-    assert "secret" not in response.text
-
-
-def test_file_scan_auth_schema_and_configured_limit(env):
+def test_file_scan_metadata_only_and_shared_across_instances(env, encoding):
     client, app, _ = env
-    files = {"file": ("safe.txt", b"hello")}
-    assert client.post("/api/scan/file", files=files).status_code == 401
-    assert client.post("/api/scan/file", headers=KEY, files=files).status_code == 200
-    assert client.post("/api/scan/file", headers=ORIGIN).status_code == 422
-    assert "/api/scan/file" in client.get("/openapi.json").json()["paths"]
-    assert set(client.get("/plugin/openapi.json").json()["paths"]) == {
-        "/plugin/scan",
-        "/plugin/transfers",
-    }
-    settings = app.state.settings.model_copy(update={"scan_file_max_mb": 1})
-    with TestClient(create_app(settings)) as other:
-        response = other.post(
-            "/api/scan/file",
-            headers=ORIGIN,
-            files={"file": ("large.txt", b" " * (1024 * 1024 + 1))},
-        )
-        assert response.status_code == 413
-        # Also reject oversized streamed multipart bodies before parsing.
-        response = other.post(
-            "/api/scan/file",
-            headers={**ORIGIN, "Content-Type": "multipart/form-data; boundary=demo"},
-            content=(b"x" * 100_000 for _ in range(12)),
-        )
-        assert response.status_code == 413
+    text = "이름,전화\n김,010-1234-5678\n"
+    content = text.encode(encoding)
+    result = scan_upload(client, content, "고객정보.csv")
+    assert result["findings"] == scan_file(text)["findings"]
+    assert result["sha256"] == hashlib.sha256(content).hexdigest()
+    other = Store(app.state.settings)
+    row = other.get("sessions", {"session_id": result["scan_id"]})
+    assert row["kind"] == "SCAN"
+    assert row["ttl"] <= int(now().timestamp()) + 600
+    assert "고객정보" not in str(row) and "010-1234-5678" not in str(row)
 
 
-@pytest.mark.parametrize("filename", ["sample.pdf", "photo.png", "data.json"])
-def test_unscanned_transfer_requires_separate_confirmation(env, filename):
-    client, _, s3 = env
-    for data in ({}, {"user_approved": "true", "confirm_sensitive": "true"}):
-        response = upload(client, filename=filename, data=data)
-        assert response.status_code == 415
-        assert response.json()["error"]["code"] == "UNSUPPORTED_TYPE"
-        assert response.json()["confirmation_required"] is True
-        assert response.json()["scan_supported"] is False
-    assert s3.list_objects_v2(Bucket="securedrop-test")["KeyCount"] == 0
-    assert upload(client, filename=filename, data={"confirm_unscanned": "true"}).status_code == 200
-    # Confirmation cannot bypass the whitelist or sensitive-data detection.
-    assert upload(client, filename="bad.exe", data={"confirm_unscanned": "true"}).status_code == 422
-    assert upload(client, b"010-1234-5678", data={"confirm_unscanned": "true"}).status_code == 409
-
-
-@pytest.mark.parametrize(
-    "origin",
-    [
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-    ],
-)
-def test_local_frontend_origins(env, origin):
+@pytest.mark.parametrize("path", ["/api/scan/file", "/api/sanitize"])
+def test_four_mb_limit(env, path):
     client, _, _ = env
-    response = client.post("/api/scan", json={"text": "hello"}, headers={"Origin": origin})
-    assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == origin
-
-
-@pytest.mark.parametrize("origin", [None, "null", "https://evil.test", "http://127.0.0.1:9999"])
-def test_unapproved_origins_still_require_key(env, origin):
-    client, _, _ = env
-    headers = {"Origin": origin} if origin is not None else {}
-    response = client.post("/api/scan", json={"text": "hello"}, headers=headers)
-    assert response.status_code == 401
-
-
-def test_frontend_serves_assets_without_exposing_backend_files(env):
-    client, _, _ = env
-    response = client.get("/")
-    assert response.status_code == 200
-    assert 'lang="ko"' in response.text
-    assert "/static/app.js" in response.text
-    assert response.headers["cache-control"] == "no-store"
-    for asset in ("app.js", "style.css"):
-        assert client.get(f"/static/{asset}").status_code == 200
-    assert client.get("/static/.env").status_code == 404
-    assert client.get("/static/../config.py").status_code == 404
-    assert client.post("/api/scan", json={"text": "hello"}).status_code == 401
-
-
-def test_transfer_s3_qr_and_revoke(env):
-    client, app, s3 = env
-    response = upload(client, data={"expires_in": "300"})
-    assert response.status_code == 200, response.text
-    item = response.json()
-    assert "X-Amz-Expires=300" in item["url"]
-    assert "X-Amz-Signature=" in item["url"]
-    assert item["url"].startswith("https://securedrop-test.s3.ap-northeast-2.amazonaws.com/")
-    image = Image.open(BytesIO(base64.b64decode(item["qr"].split(",", 1)[1])))
-    assert image.format == "PNG"
-    assert image.size == (180, 180)
-    assert zxingcpp.read_barcode(image).text == item["download_url"]
-    assert item["download_url"] == f"http://testserver/d/{item['id']}"
-    identifier = item["id"]
-    key = app.state.store.transfer(identifier)["object_key"]
-    obj = s3.get_object(Bucket="securedrop-test", Key=key)
-    assert obj["Body"].read() == b"hello"
-    assert obj["ServerSideEncryption"] == "AES256"
-    assert obj["ContentType"] == "application/octet-stream"
-    assert obj["ContentDisposition"] == "attachment; filename*=UTF-8''sample.txt"
-    assert client.get(f"/api/transfers/{identifier}", headers=ORIGIN).json()["status"] == "active"
-    assert client.delete(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 200
-    assert client.get(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 404
-    with pytest.raises(ClientError):
-        s3.get_object(Bucket="securedrop-test", Key=key)
-    logs = client.get("/api/logs", headers=ORIGIN).json()["items"]
-    assert [row["event"] for row in logs] == ["REVOKE", "TRANSFER"]
-    assert all(set(row) == {"time", "event", "types", "source"} for row in logs)
-    assert "sample.txt" not in str(logs) and item["url"] not in str(logs)
-
-
-@pytest.mark.parametrize("filename", ["sample.txt", "한글 파일명 " * 15 + ".txt"])
-def test_short_qr_with_long_presigned_url_and_session_credentials(env, monkeypatch, filename):
-    client, app, s3 = env
-    # EC2 role credentials add a long, URL-escaped security token to the QR payload.
-    token = base64.b64encode(bytes(range(256)) * 3).decode("ascii")
-    monkeypatch.setenv("AWS_SESSION_TOKEN", token)
-    response = upload(client, filename=filename)
-    assert response.status_code == 200, response.text
-    item = response.json()
-    assert "X-Amz-Security-Token=" in item["url"]
-    assert len(item["url"]) > 1400
-    image = Image.open(BytesIO(base64.b64decode(item["qr"].split(",", 1)[1])))
-    decoded = zxingcpp.read_barcode(image)
-    assert decoded is not None
-    assert decoded.text == item["download_url"]
-    assert image.size == (180, 180)
-    assert len(decoded.text) < 80
-    assert "response-content-disposition" not in item["url"]
-    key = app.state.store.transfer(item["id"])["object_key"]
-    obj = s3.get_object(Bucket="securedrop-test", Key=key)
-    assert obj["ContentDisposition"] == f"attachment; filename*=UTF-8''{quote(filename, safe='')}"
-
-
-def test_short_download_redirect_preserves_deadline_and_survives_restart(env, monkeypatch):
-    client, app, _ = env
-    item = upload(client, data={"expires_in": "300"}).json()
-    # Short URLs resolve from persisted transfer metadata, without storing S3 URLs.
-    settings = app.state.settings
-    with TestClient(create_app(settings)) as restarted:
-        response = restarted.get(item["download_url"], follow_redirects=False)
-    assert response.status_code == 302
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["referrer-policy"] == "no-referrer"
-    location = response.headers["location"]
-    assert location.startswith("https://securedrop-test.s3.ap-northeast-2.amazonaws.com/")
-    assert "X-Amz-Signature=" in location
-    assert 0 < int(parse_qs(urlsplit(location).query)["X-Amz-Expires"][0]) <= 300
-    # A later scan can never reset the original transfer lifetime.
-    instant = now()
-    monkeypatch.setattr("main.now", lambda: instant)
-    with app.state.store.connect() as conn:
-        conn.execute(
-            "UPDATE transfers SET expires_at=? WHERE id=?",
-            ((instant + timedelta(seconds=12)).isoformat(), item["id"]),
-        )
-    response = client.get(item["download_url"], follow_redirects=False)
-    assert response.status_code == 302
-    query = parse_qs(urlsplit(response.headers["location"]).query)
-    assert query["X-Amz-Expires"] == ["12"]
-
-
-def test_short_download_rejects_expired_revoked_and_unknown_links(env, monkeypatch):
-    client, app, _ = env
-    item = upload(client).json()
-    instant = now()
-    monkeypatch.setattr("main.now", lambda: instant)
-    with app.state.store.connect() as conn:
-        conn.execute(
-            "UPDATE transfers SET expires_at=? WHERE id=?", (instant.isoformat(), item["id"])
-        )
-    response = client.get(item["download_url"], follow_redirects=False)
-    assert response.status_code == 410
-    assert "location" not in response.headers
-    assert client.delete(f"/api/transfers/{item['id']}", headers=ORIGIN).status_code == 200
-    assert client.get(item["download_url"], follow_redirects=False).status_code == 404
-    assert client.get("/d/unknown", follow_redirects=False).status_code == 404
-
-
-@pytest.mark.parametrize(
-    "public_base",
-    [
-        "https://securedrop.ldh.mzsec.cloud",
-        "https://d1234567890123.cloudfront.net/",
-    ],
-)
-def test_short_qr_uses_configured_public_origin(env, public_base):
-    _, app, _ = env
-    settings = app.state.settings.model_dump()
-    settings["public_base_url"] = public_base
-    with TestClient(create_app(Settings(_env_file=None, **settings))) as client:
-        item = upload(client).json()
-    assert item["download_url"] == public_base.rstrip("/") + "/d/" + item["id"]
-    image = Image.open(BytesIO(base64.b64decode(item["qr"].split(",", 1)[1])))
-    assert image.size == (180, 180)
-    assert zxingcpp.read_barcode(image).text == item["download_url"]
-
-
-def test_text_confirmation_and_full_scan(env):
-    client, _, s3 = env
-    content = (" " * 60_000 + "010-1234-5678").encode()
-    response = upload(client, content)
-    assert response.status_code == 409
-    assert response.json()["findings"] == [{"type": "PHONE", "count": 1}]
-    assert "Contents" not in s3.list_objects_v2(Bucket="securedrop-test")
-    assert upload(client, content, data={"confirm_sensitive": "true"}).status_code == 200
-    logs = client.get("/api/logs", headers=ORIGIN).json()["items"]
-    assert logs[0]["types"] == ["PHONE"]
-    assert "010-1234-5678" not in str(logs)
-
-
-def test_limits_and_bad_encodings(env):
-    client, _, _ = env
-    assert upload(client, filename="bad.exe").status_code == 422
-    assert upload(client, content=b"").status_code == 422
-    assert upload(client, data={"expires_in": "3601"}).status_code == 422
-    assert upload(client, data={"expires_in": "0"}).status_code == 422
-    assert upload(client, content=b"a" * (1024 * 1024 + 1)).status_code == 413
-    assert upload(client, content=b"a" * (2 * 1024 * 1024)).status_code == 413
-    assert upload(client, content=b"\x00\x00binary").status_code == 422
-    assert upload(client, content="안녕하세요".encode("cp949")).status_code == 200
-    assert upload(client, content="010-1234-5678".encode("utf-16")).status_code == 409
-
-
-def test_expiration_and_storage_failure(env):
-    client, app, _ = env
-    identifier = upload(client).json()["id"]
-    with app.state.store.connect() as conn:
-        conn.execute(
-            "UPDATE transfers SET expires_at=? WHERE id=?",
-            (
-                (now() - timedelta(seconds=1)).isoformat(),
-                identifier,
-            ),
-        )
-    assert client.get(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 410
-    assert client.delete(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 200
-    app.state.settings.s3_bucket = "no-such-bucket"
-    response = upload(client)
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "STORAGE_ERROR"
-
-
-def test_delete_failure_preserves_status_and_failed_commit_cleans_s3(env, monkeypatch):
-    client, app, s3 = env
-    identifier = upload(client).json()["id"]
-    from errors import APIError
-
-    def failed_delete(key):
-        raise APIError(502, "STORAGE_ERROR", "storage failed")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(app.state.storage, "delete", failed_delete)
-        assert client.delete(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 502
-    assert client.get(f"/api/transfers/{identifier}", headers=ORIGIN).status_code == 200
-
-    def failed_commit(*args):
-        raise RuntimeError("internal failure containing private data")
-
-    monkeypatch.setattr(app.state.store, "save_transfer", failed_commit)
-    response = upload(client)
-    assert response.status_code == 500
-    assert "private data" not in response.text
-    assert s3.list_objects_v2(Bucket="securedrop-test")["KeyCount"] == 1
-
-
-def test_streamed_oversize_request(env):
-    client, _, _ = env
-
-    def chunks():
-        for _ in range(20):
-            yield b"a" * 100_000
-
-    response = client.post(
-        "/api/scan", headers={**ORIGIN, "Content-Type": "application/json"}, content=chunks()
-    )
-    assert response.status_code == 413
-
-
-def test_twenty_mib_boundary(env):
-    _, app, s3 = env
-    settings = app.state.settings.model_copy(update={"max_file_mb": 20})
-    with TestClient(create_app(settings)) as client:
-        response = upload(
-            client,
-            b"a" * (20 * 1024 * 1024),
-            filename="sample.pdf",
-            data={"confirm_unscanned": "true"},
-        )
-        assert response.status_code == 200, response.text
-        objects = s3.list_objects_v2(Bucket="securedrop-test")["Contents"]
-        assert objects[0]["Size"] == 20 * 1024 * 1024
-        response = upload(client, b"a" * (20 * 1024 * 1024 + 1), filename="sample.pdf")
-        assert response.status_code == 413
-
-
-def test_auth_plugin_consent_and_schema(env):
-    client, _, _ = env
-    assert client.post("/api/scan", json={"text": "hello"}).status_code == 401
+    data = {"actions": '[{"action":"MASK","targets":["PHONE"]}]'}
     assert (
         client.post(
-            "/api/scan", headers={"Origin": "https://evil.test"}, json={"text": ""}
+            path, files={"file": ("a.txt", b"a" * (4 * 1024 * 1024 + 1))}, data=data
         ).status_code
-        == 401
+        == 413
     )
     assert (
         client.post(
-            "/api/scan", headers={**ORIGIN, "X-API-Key": "wrong"}, json={"text": ""}
+            path, files={"file": ("a.txt", b"a" * (4 * 1024 * 1024))}, data=data
         ).status_code
-        == 401
-    )
-    assert client.post("/plugin/scan", headers=ORIGIN, json={"text": ""}).status_code == 401
-    assert client.post("/plugin/scan", headers=KEY, json={"text": ""}).status_code == 200
-    assert upload(client, headers=KEY).status_code == 403
-    assert upload(client, headers=KEY, data={"user_approved": "true"}).status_code == 200
-    schema = client.get("/plugin/openapi.json").json()
-    assert set(schema["paths"]) == {"/plugin/scan", "/plugin/transfers"}
-    assert schema["paths"]["/plugin/transfers"]["post"]["security"] == [{"APIKeyHeader": []}]
-
-
-def test_plugin_rate_limit_shared_between_apps(env):
-    client, app, _ = env
-    other_app = create_app(app.state.settings)
-    with TestClient(other_app) as other:
-        for i in range(30):
-            target = other if i % 2 else client
-            assert target.post("/plugin/scan", headers=KEY, json={"text": ""}).status_code == 200
-        response = client.post("/plugin/scan", headers=KEY, json={"text": ""})
-        assert response.status_code == 429
-        assert response.headers["retry-after"] == "60"
-        with app.state.store.connect() as conn:
-            conn.execute("UPDATE rate_limits SET window=window-61")
-        assert client.post("/plugin/scan", headers=KEY, json={"text": ""}).status_code == 200
-
-
-def test_logs_and_cors(env):
-    client, _, _ = env
-    headers = {**ORIGIN, "X-Source": "extension"}
-    payload = {"event": "BLOCK", "types": ["RRN"], "source": "extension"}
-    assert client.post("/api/logs", json=payload, headers=headers).status_code == 200
-    assert (
-        client.post("/api/logs", json={**payload, "text": "private"}, headers=headers).status_code
-        == 422
-    )
-    assert (
-        client.post("/api/logs", json={**payload, "event": "TRANSFER"}, headers=headers).status_code
-        == 422
-    )
-    assert client.get("/api/logs?limit=101", headers=ORIGIN).status_code == 422
-    response = client.options(
-        "/api/scan",
-        headers={
-            **ORIGIN,
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "Content-Type",
-        },
-    )
-    assert response.headers["access-control-allow-origin"] == ORIGIN["Origin"]
-    response = client.options(
-        "/api/scan",
-        headers={
-            "Origin": "https://evil.test",
-            "Access-Control-Request-Method": "POST",
-        },
-    )
-    assert "access-control-allow-origin" not in response.headers
-
-
-def sanitize_upload(client, content, actions, filename="customers.csv"):
-    return client.post(
-        "/api/sanitize",
-        headers=ORIGIN,
-        files={"file": (filename, content)},
-        data={"actions": json.dumps(actions)},
-    )
-
-
-def send_draft(client, identifier, **fields):
-    return client.post("/api/transfers", headers=ORIGIN, data={"sanitize_id": identifier, **fields})
-
-
-def test_sanitize_preview_approval_and_consumption(env):
-    client, app, s3 = env
-    original = (
-        b"name,rrn,phone,token\nKim,900101-1234568,010-1234-5678,sk-aaaaaaaaaaaaaaaaaaaaaaaa\n"
-    )
-    assert upload(client, original, filename="customers.csv").status_code == 409
-    actions = [{"action": "MASK", "targets": ["RRN", "PHONE", "API_KEY"]}]
-    response = sanitize_upload(client, original, actions)
-    assert response.status_code == 200, response.text
-    result = response.json()
-    assert result["clean"] and not result["findings_after"]
-    assert "900101-1******" in result["preview"]
-    assert "010-****-5678" in result["preview"]
-    assert "[REDACTED]" in result["preview"]
-    assert b"900101-1234568" in original
-    assert "Contents" not in s3.list_objects_v2(Bucket="securedrop-test")
-    identifier = result["sanitize_id"]
-    assert send_draft(client, identifier).status_code == 403
-    sent = send_draft(client, identifier, user_approved="true")
-    assert sent.status_code == 200, sent.text
-    key = app.state.store.transfer(sent.json()["id"])["object_key"]
-    processed = s3.get_object(Bucket="securedrop-test", Key=key)["Body"].read()
-    assert processed.decode() == result["preview"] + "\n"
-    assert identifier not in app.state.drafts.entries
-    assert send_draft(client, identifier, user_approved="true").status_code == 410
-    logs = app.state.store.logs(10)
-    assert [row["event"] for row in logs] == ["TRANSFER", "SANITIZE", "BLOCK"]
-    for path in app.state.settings.database_path.parent.glob("test.db*"):
-        persisted = path.read_bytes()
-        for secret in (b"900101-1234568", b"010-1234-5678", b"sk-aaaaaaaaaaaaaaaaaaaaaaaa"):
-            assert secret not in persisted
-
-
-def test_sanitize_residual_requires_separate_confirmation(env):
-    client, app, s3 = env
-    response = sanitize_upload(
-        client, b"900101-1234568,010-1234-5678", [{"action": "MASK", "targets": ["RRN"]}]
-    )
-    result = response.json()
-    assert not result["clean"]
-    assert result["findings_after"] == [{"type": "PHONE", "count": 1}]
-    identifier = result["sanitize_id"]
-    blocked = send_draft(client, identifier, user_approved="true")
-    assert blocked.status_code == 409
-    assert blocked.json()["error"]["code"] == "SENSITIVE_REMAINS"
-    assert identifier in app.state.drafts.entries
-    assert "Contents" not in s3.list_objects_v2(Bucket="securedrop-test")
-    assert send_draft(client, identifier, confirm_sensitive="true").status_code == 403
-    assert (
-        send_draft(client, identifier, confirm_sensitive="true", user_approved="true").status_code
         == 200
     )
 
 
-def test_delete_preserves_csv_structure_and_allows_empty_result(env):
-    client, _, _ = env
-    response = sanitize_upload(
-        client,
-        b"name,email,card\nKim,a@example.com,4111-1111-1111-1111",
-        [{"action": "DELETE", "targets": ["EMAIL", "CARD"]}],
+def test_presigned_post_policy_and_manage_token(env):
+    client, app, _ = env
+    response = issue(client)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    row = app.state.store.transfer(result["id"])
+    assert row["manage_hash"] == token_hash(result["manage_token"])
+    assert result["manage_token"] not in str(row)
+    assert len(base64.urlsafe_b64decode(result["manage_token"] + "=")) == 32
+    policy = json.loads(base64.b64decode(result["uploads"][0]["fields"]["policy"]))
+    assert ["content-length-range", 1, 5] in policy["conditions"]
+    assert {"key": f"transfers/{result['id']}/0"} in policy["conditions"]
+    assert {
+        "x-amz-checksum-sha256": base64.b64encode(hashlib.sha256(b"hello").digest()).decode()
+    } in policy["conditions"]
+    for headers in ({}, {"X-Manage-Token": "wrong"}):
+        assert client.get(f"/api/transfers/{result['id']}", headers=headers).status_code == 403
+        assert client.delete(f"/api/transfers/{result['id']}", headers=headers).status_code == 403
+        assert (
+            client.post(f"/api/transfers/{result['id']}/complete", headers=headers).status_code
+            == 403
+        )
+
+
+def test_complete_download_and_revoke(env):
+    client, app, s3 = env
+    issued, result = activate(env)
+    assert result["status"] == "ACTIVE"
+    assert result["share_url"] == f"https://demo.example.com/d.html?id={issued['id']}"
+    assert base64.b64decode(result["qr"].split(",")[1]).startswith(b"\x89PNG")
+    download = client.get(f"/api/d/{issued['id']}")
+    assert download.status_code == 200
+    url = download.json()["files"][0]["url"]
+    assert int(parse_qs(urlsplit(url).query)["X-Amz-Expires"][0]) <= 300
+    assert app.state.store.transfer(issued["id"])["download_count"] == 1
+    # Complete retries cannot create duplicate TRANSFER events.
+    assert (
+        client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
+        == 200
     )
-    assert response.json()["preview"] == "name,email,card\nKim,,"
-    assert response.json()["clean"]
-    empty = sanitize_upload(
-        client, b"010-1234-5678", [{"action": "DELETE", "targets": ["PHONE"]}]
+    events = app.state.store.query_day("events", now().date().isoformat())
+    assert sum(e["event"] == "TRANSFER" for e in events) == 1
+    assert (
+        client.delete(f"/api/transfers/{issued['id']}", headers=managed(issued)).status_code == 200
+    )
+    assert client.get(f"/api/d/{issued['id']}").status_code == 404
+    assert (
+        client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
+        == 404
+    )
+    assert not s3.list_objects_v2(Bucket=app.state.settings.s3_bucket).get("Contents")
+
+
+@pytest.mark.parametrize(
+    "uploaded,code",
+    [(None, "UPLOAD_INCOMPLETE"), (b"no", "UPLOAD_INCOMPLETE"), (b"other", "INTEGRITY_MISMATCH")],
+)
+def test_completion_verifies_real_s3_bytes(env, uploaded, code):
+    client, app, s3 = env
+    issued = issue(client).json()
+    if uploaded is not None:
+        put(s3, app, issued, uploaded)
+    response = client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued))
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == code
+    if code == "INTEGRITY_MISMATCH":
+        assert app.state.store.transfer(issued["id"])["status"] == "REVOKED"
+        assert not s3.list_objects_v2(Bucket=app.state.settings.s3_bucket).get("Contents")
+
+
+def test_expired_session_not_accepted_even_before_ttl_cleanup(env):
+    client, app, _ = env
+    result = scan_upload(client)
+    row = app.state.store.get("sessions", {"session_id": result["scan_id"]})
+    row["ttl"] = int(now().timestamp()) - 1
+    app.state.store.put("sessions", row)
+    payload = {
+        "files": [{"name": "a.txt", "size": 5, "sha256": result["sha256"]}],
+        "scan_id": result["scan_id"],
+    }
+    assert client.post("/api/transfers", json=payload).status_code == 410
+
+
+def test_transfer_expiry_and_delete_after_expiry(env):
+    client, app, _ = env
+    issued, _ = activate(env)
+    row = app.state.store.transfer(issued["id"])
+    row["expires_at"] = (now() - timedelta(seconds=1)).isoformat()
+    app.state.store.put("transfers", row)
+    assert client.get(f"/api/d/{issued['id']}").status_code == 410
+    assert client.get(f"/api/transfers/{issued['id']}", headers=managed(issued)).status_code == 410
+    assert (
+        client.delete(f"/api/transfers/{issued['id']}", headers=managed(issued)).status_code == 200
+    )
+
+
+def test_sanitize_returns_bytes_and_requires_approval(env):
+    client, app, s3 = env
+    result = client.post(
+        "/api/sanitize",
+        files={"file": ("a.txt", b"010-1234-5678")},
+        data={"actions": '[{"action":"MASK","targets":["PHONE"]}]'},
     ).json()
-    assert empty["clean"] and empty["preview"] == ""
-    assert send_draft(client, empty["sanitize_id"], user_approved="true").status_code == 200
+    content = base64.b64decode(result["content_b64"])
+    assert content == b"010-****-5678" and result["clean"]
+    row = app.state.store.get("sessions", {"session_id": result["sanitize_id"]})
+    assert "content" not in row and "preview" not in row and "name" not in row
+    payload = {
+        "files": [{"name": "a.txt", "size": len(content), "sha256": result["sha256"]}],
+        "sanitize_id": result["sanitize_id"],
+    }
+    assert client.post("/api/transfers", json=payload).status_code == 422
+    payload["user_approved"] = True
+    issued = client.post("/api/transfers", json=payload).json()
+    put(s3, app, issued, content)
+    assert (
+        client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
+        == 200
+    )
+
+
+def test_sensitive_unsupported_and_hash_checks(env):
+    client, _, _ = env
+    assert issue(client, b"010-1234-5678").status_code == 409
+    assert issue(client, b"010-1234-5678", acknowledge_risk=True).status_code == 200
+    result = scan_upload(client)
+    payload = {
+        "files": [{"name": "a.txt", "size": 5, "sha256": "0" * 64}],
+        "scan_id": result["scan_id"],
+    }
+    assert (
+        client.post("/api/transfers", json=payload).json()["error"]["code"] == "INTEGRITY_MISMATCH"
+    )
+    payload = {"files": [{"name": "a.pdf", "size": 5, "sha256": "0" * 64}]}
+    assert client.post("/api/transfers", json=payload).status_code == 422
+    payload["acknowledge_unsupported"] = True
+    assert client.post("/api/transfers", json=payload).status_code == 200
+    payload["files"][0]["name"] = "bad.exe"
+    assert client.post("/api/transfers", json=payload).status_code == 422
+
+
+def test_multi_file_individual_references_and_total_limit(env):
+    client, app, s3 = env
+    files = []
+    for content in (b"hello", b"world"):
+        result = scan_upload(client, content)
+        files.append(
+            {"name": "a.txt", "size": 5, "sha256": result["sha256"], "scan_id": result["scan_id"]}
+        )
+    issued = client.post("/api/transfers", json={"files": files}).json()
+    for i, content in enumerate((b"hello", b"world")):
+        put(s3, app, issued, content, i)
+    assert (
+        client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
+        == 200
+    )
+    assert len(client.get(f"/api/d/{issued['id']}").json()["files"]) == 2
+    for f in files:
+        f["size"] = 11 * 1024 * 1024
+    assert client.post("/api/transfers", json={"files": files}).status_code == 413
+
+
+def test_revoked_record_cannot_be_activated(env):
+    client, app, _ = env
+    issued = issue(client).json()
+    app.state.store.transition(issued["id"], "PENDING_UPLOAD", "REVOKED")
+    with pytest.raises(APIError) as error:
+        app.state.store.transition(issued["id"], "PENDING_UPLOAD", "ACTIVE")
+    assert error.value.code == "STATE_CONFLICT"
+
+
+@pytest.fixture
+def admin(env):
+    client, app, _ = env
+    app.state.store.put(
+        "admins",
+        {
+            "username": "operator",
+            "password_hash": password_hash("test-pass"),
+            "created_at": now().isoformat(),
+            "failed_count": 0,
+            "locked_until": 0,
+        },
+    )
+    response = client.post(
+        "/api/admin/login", json={"username": "operator", "password": "test-pass"}
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": "Bearer " + response.json()["token"]}
+
+
+def test_scrypt_salts():
+    first, second = password_hash("password"), password_hash("password")
+    assert first != second
+    assert first.startswith("scrypt$131072$8$1$")
+    assert verify_password("password", first) and not verify_password("wrong", first)
+
+
+def test_admin_failures_and_lock(env, admin):
+    client, app, _ = env
+    unknown = client.post("/api/admin/login", json={"username": "absent", "password": "wrong"})
+    for i in range(5):
+        response = client.post(
+            "/api/admin/login", json={"username": "operator", "password": "wrong"}
+        )
+        if i < 4:
+            assert response.status_code == 401 and response.json() == unknown.json()
+        else:
+            assert response.status_code == 423
+    assert (
+        client.post(
+            "/api/admin/login", json={"username": "operator", "password": "test-pass"}
+        ).status_code
+        == 423
+    )
+    row = app.state.store.get("admins", {"username": "operator"})
+    row["locked_until"] = int(now().timestamp()) - 1
+    app.state.store.put("admins", row)
+    assert (
+        client.post(
+            "/api/admin/login", json={"username": "operator", "password": "test-pass"}
+        ).status_code
+        == 200
+    )
+
+
+def test_admin_routes_privacy_stats_and_logout(env, admin):
+    client, app, _ = env
+    issued, _ = activate(env)
+    assert client.get("/api/admin/transfers").status_code == 401
+    assert (
+        client.post("/api/ext/logs", json={"event": "BLOCK", "types": ["PHONE"]}).status_code == 200
+    )
+    result = client.get("/api/admin/transfers", headers=admin)
+    assert result.status_code == 200
+    assert (
+        "sample.txt" not in result.text
+        and "s3_key" not in result.text
+        and "manage_hash" not in result.text
+    )
+    assert "share_url" not in result.text
+    stats = client.get("/api/admin/stats?days=7", headers=admin).json()
+    assert stats["by_event"]["TRANSFER"] == 1 and stats["by_source"]["extension"] == 1
+    assert client.delete(f"/api/admin/transfers/{issued['id']}", headers=admin).status_code == 200
+    assert client.get("/api/d/" + issued["id"]).status_code == 404
+    events = client.get("/api/admin/events", headers=admin).json()["items"]
+    assert any(e["source"] == "admin" and e["event"] == "REVOKE" for e in events)
+    token = admin["Authorization"].split()[1]
+    session = app.state.store.get("admin_sessions", {"token_hash": token_hash(token)})
+    assert token not in str(session)
+    assert client.post("/api/admin/logout", headers=admin).status_code == 200
+    assert client.get("/api/admin/stats", headers=admin).status_code == 401
+
+
+def test_admin_expiry_checked_without_ttl_delete(env, admin):
+    client, app, _ = env
+    key = token_hash(admin["Authorization"].split()[1])
+    row = app.state.store.get("admin_sessions", {"token_hash": key})
+    row["expires_at"] = (now() - timedelta(seconds=1)).isoformat()
+    app.state.store.put("admin_sessions", row)
+    assert client.get("/api/admin/stats", headers=admin).status_code == 401
+
+
+def gateway_request(app, path, payload, key=True):
+    event = {
+        "resource": "/api/{proxy+}",
+        "path": "/prod" + path,
+        "httpMethod": "POST",
+        "headers": {"content-type": "application/json", "x-api-key": "gateway-validated"},
+        "multiValueHeaders": {},
+        "queryStringParameters": None,
+        "pathParameters": {"proxy": path.removeprefix("/api/")},
+        "stageVariables": None,
+        "requestContext": {
+            "stage": "prod",
+            "identity": {"sourceIp": "127.0.0.1", **({"apiKeyId": "test-key-id"} if key else {})},
+        },
+        "body": json.dumps(payload),
+        "isBase64Encoded": False,
+    }
+    return Mangum(app, api_gateway_base_path="/prod", lifespan="off")(event, {})
+
+
+def test_plugin_gateway_auth_and_strict_block(env):
+    client, app, _ = env
+    assert (
+        client.post(
+            "/api/plugin/scan", json={"text": "hi"}, headers={"X-API-Key": "fake"}
+        ).status_code
+        == 401
+    )
+    assert gateway_request(app, "/api/plugin/scan", {"text": "hello"})["statusCode"] == 200
+    assert (
+        gateway_request(app, "/api/plugin/scan", {"text": "hello"}, key=False)["statusCode"] == 401
+    )
+    response = gateway_request(
+        app, "/api/plugin/transfers", {"text": "010-1234-5678", "user_approved": True}
+    )
+    assert response["statusCode"] == 409 and "SENSITIVE_DETECTED" in response["body"]
+    assert gateway_request(app, "/api/plugin/transfers", {"text": "hello"})["statusCode"] == 422
+    response = gateway_request(
+        app, "/api/plugin/transfers", {"text": "hello", "user_approved": True}
+    )
+    assert response["statusCode"] == 200, response
+    row = json.loads(response["body"])
+    assert client.get("/api/d/" + row["id"]).status_code == 200
+    schema = client.get("/api/plugin/openapi.json").json()
+    assert set(schema["paths"]) == {"/api/plugin/scan", "/api/plugin/transfers"}
+
+
+def test_cors_manage_and_bearer_headers(env):
+    client, _, _ = env
+    response = client.options(
+        "/api/transfers/abc",
+        headers={
+            "Origin": "http://localhost:5500",
+            "Access-Control-Request-Method": "DELETE",
+            "Access-Control-Request-Headers": "X-Manage-Token,Authorization",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5500"
+
+
+def test_storage_errors_are_redacted(env, monkeypatch):
+    client, app, _ = env
+    from botocore.exceptions import ClientError
+
+    def fail(**kwargs):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "SECRET"}}, "GetItem")
+
+    monkeypatch.setattr(app.state.store.resource.meta.client, "get_item", fail)
+    response = client.get("/api/transfers/missing")
+    assert response.status_code == 502 and "SECRET" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -626,83 +496,112 @@ def test_delete_preserves_csv_structure_and_allows_empty_result(env):
         [{"action": "MASK", "targets": ["RRN"], "text": "private"}],
     ],
 )
-def test_sanitize_invalid_actions_do_not_persist(env, actions):
-    client, app, s3 = env
-    response = sanitize_upload(client, b"900101-1234568", actions)
-    assert response.status_code == 422
-    assert "900101-1234568" not in response.text
-    assert not app.state.drafts.entries
-    assert not app.state.store.logs(10)
-    assert "Contents" not in s3.list_objects_v2(Bucket="securedrop-test")
-
-
-def test_sanitize_file_validation_cancel_and_preview_limit(env):
+def test_invalid_sanitize_actions_do_not_persist(env, actions):
     client, app, _ = env
-    action = [{"action": "MASK", "targets": ["PHONE"]}]
-    assert sanitize_upload(client, b"hi", action, "file.pdf").status_code == 415
-    assert sanitize_upload(client, b"", action).status_code == 422
-    assert sanitize_upload(client, b"\x00binary", action).status_code == 422
-    assert sanitize_upload(client, b"a" * (1024 * 1024 + 1), action).status_code == 413
-    cancelled = sanitize_upload(client, b"010-1234-5678", [{"action": "CANCEL"}]).json()
-    assert cancelled["cancelled"] and cancelled["sanitize_id"] is None
-    assert not app.state.drafts.entries
-    content = ("전화,010-1234-5678\n" * 30).encode("cp949")
-    result = sanitize_upload(client, content, action).json()
-    assert len(result["preview"].splitlines()) == 20
-    assert result["clean"]
-    identifier = result["sanitize_id"]
-    assert client.delete(f"/api/sanitize/{identifier}", headers=ORIGIN).status_code == 200
-    assert identifier not in app.state.drafts.entries
+    response = sanitize_upload(client, b"900101-1234568", actions)
+    assert response.status_code == 422 and "900101-1234568" not in response.text
+    assert app.state.store.query_day("events", now().date().isoformat()) == []
+    assert app.state.store.table("sessions").scan()["Count"] == 0
 
 
-def test_sanitize_expiry_retry_and_conflicting_inputs(env, monkeypatch):
-    client, app, s3 = env
-    actions = [{"action": "MASK", "targets": ["PHONE"]}]
-    identifier = sanitize_upload(client, b"010-1234-5678", actions).json()["sanitize_id"]
-    assert (
-        client.post(
-            "/api/transfers",
-            headers=ORIGIN,
-            files={"file": ("a.txt", b"hi")},
-            data={"sanitize_id": identifier, "user_approved": "true"},
-        ).status_code
-        == 422
+def test_oversize_declared_metadata_returns_413(env):
+    client, _, _ = env
+    response = client.post(
+        "/api/transfers",
+        json={"files": [{"name": "a.pdf", "size": 20 * 1024 * 1024 + 1, "sha256": "0" * 64}]},
     )
-    app.state.settings.s3_bucket = "no-such-bucket"
-    assert send_draft(client, identifier, user_approved="true").status_code == 502
-    assert identifier in app.state.drafts.entries
-    app.state.settings.s3_bucket = "securedrop-test"
-    assert send_draft(client, identifier, user_approved="true").status_code == 200
-    identifier = sanitize_upload(client, b"010-1234-5678", actions).json()["sanitize_id"]
-    app.state.drafts.entries[identifier] = replace(app.state.drafts.entries[identifier], deadline=0)
-    assert send_draft(client, identifier, user_approved="true").status_code == 410
-    assert identifier not in app.state.drafts.entries
-    assert s3.list_objects_v2(Bucket="securedrop-test")["KeyCount"] == 1
+    assert response.status_code == 413
 
 
-def test_large_multipart_never_rolls_to_disk(env, monkeypatch):
-    _, app, _ = env
+def test_delete_failure_stays_revoked_and_supports_retry(env, monkeypatch):
+    client, app, s3 = env
+    issued, _ = activate(env)
+    original = app.state.storage.delete
 
-    def forbidden_rollover(self):
-        raise AssertionError("File contents must stay in memory")
+    def fail(key):
+        raise APIError(502, "STORAGE_ERROR", "storage unavailable")
 
-    monkeypatch.setattr(tempfile.SpooledTemporaryFile, "rollover", forbidden_rollover)
-    settings = app.state.settings.model_copy(update={"max_file_mb": 20})
-    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
-        content = b"name,phone\n" + b"Kim,010-1234-5678\n" * 65_000
-        assert len(content) > 1024 * 1024
-        result = sanitize_upload(client, content, [{"action": "MASK", "targets": ["PHONE"]}])
-        assert result.status_code == 200, result.text
-        assert result.json()["clean"]
-        assert (
-            upload(
-                client,
-                b"x" * (2 * 1024 * 1024),
-                filename="a.pdf",
-                data={"confirm_unscanned": "true"},
-            ).status_code
-            == 200
-        )
+    monkeypatch.setattr(app.state.storage, "delete", fail)
+    response = client.delete(f"/api/transfers/{issued['id']}", headers=managed(issued))
+    assert response.status_code == 502
+    assert client.get(f"/api/d/{issued['id']}").status_code == 404
+    assert (
+        client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
+        == 404
+    )
+    monkeypatch.setattr(app.state.storage, "delete", original)
+    assert (
+        client.delete(f"/api/transfers/{issued['id']}", headers=managed(issued)).status_code == 200
+    )
+    assert not s3.list_objects_v2(Bucket=app.state.settings.s3_bucket).get("Contents")
+
+
+def test_plaintext_hash_bypass_only_allowed_for_encrypted_transfers(env):
+    client, app, s3 = env
+    scanned = scan_upload(client)
+    content = b"encrypted-demo-ciphertext"
+    payload = {
+        "files": [
+            {"name": "a.txt", "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+        ],
+        "scan_id": scanned["scan_id"],
+        "encrypted": True,
+    }
+    issued = client.post("/api/transfers", json=payload).json()
+    put(s3, app, issued, content)
+    assert (
+        client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
+        == 200
+    )
+    assert client.get(f"/api/d/{issued['id']}").json()["encrypted"] is True
+
+
+def test_scan_reference_does_not_bypass_sensitive_checks_with_different_extension(env):
+    client, _, _ = env
+    scanned = scan_upload(client, b"010-1234-5678")
+    response = client.post(
+        "/api/transfers",
+        json={
+            "files": [{"name": "a.pdf", "size": 13, "sha256": scanned["sha256"]}],
+            "scan_id": scanned["scan_id"],
+            "acknowledge_unsupported": True,
+        },
+    )
+    assert response.status_code == 409
+
+
+def test_multipart_never_rolls_to_disk_and_logs_exclude_secrets(env, monkeypatch, caplog):
+    import tempfile
+
+    client, _, _ = env
+
+    def fail(self):
+        raise AssertionError("File contents must stay in RAM")
+
+    monkeypatch.setattr(tempfile.SpooledTemporaryFile, "rollover", fail)
+    response = client.post(
+        "/api/sanitize",
+        files={"file": ("private-file.csv", b"name,phone\n" + b"Kim,010-1234-5678\n" * 65000)},
+        data={"actions": '[{"action":"MASK","targets":["PHONE"]}]'},
+    )
+    assert response.status_code == 200 and response.json()["clean"]
+    logs = "\n".join(r.message for r in caplog.records if r.name == "securedrop")
+    assert "010-1234-5678" not in logs and "private-file.csv" not in logs
+
+
+def sanitize_upload(client, content, actions):
+    return client.post(
+        "/api/sanitize",
+        files={"file": ("sample.csv", content)},
+        data={"actions": json.dumps(actions)},
+    )
+
+
+def test_detection_negative_and_counts():
+    assert not scan("일반 문장 900101-1234567 4111-1111-1111-1112")["blocked"]
+    assert scan("010-1234-5678 010-2222-3333")["findings"] == [{"type": "PHONE", "count": 2}]
+    text = " " * 48_995 + "010-1234-5678" + " " * 51_000 + "010-9999-8888"
+    assert scan_file(text)["findings"] == [{"type": "PHONE", "count": 2}]
 
 
 @pytest.mark.parametrize(
@@ -724,19 +623,14 @@ def test_assistant_metadata_and_fixed_actions(env, message, action, targets):
         "filename": "private-name.csv",
         "findings": [{"type": "RRN", "count": 2}, {"type": "PHONE", "count": 1}],
     }
-    response = client.post(
-        "/api/assist", headers=ORIGIN, json={"message": message, "context": context}
-    )
+    response = client.post("/api/assist", json={"message": message, "context": context})
     assert response.status_code == 200, response.text
     result = response.json()
     assert result["action"] == action and result["targets"] == targets
     assert {option["action"] for option in result["options"]} == {"MASK", "DELETE", "CANCEL"}
     assert "private-name.csv" not in response.text
-    assert client.get("/api/logs", headers=ORIGIN).json() == {"items": []}
     context["text"] = "900101-1234568"
-    rejected = client.post(
-        "/api/assist", headers=ORIGIN, json={"message": message, "context": context}
-    )
+    rejected = client.post("/api/assist", json={"message": message, "context": context})
     assert rejected.status_code == 422 and "900101-1234568" not in rejected.text
 
 
@@ -751,48 +645,3 @@ def test_scanning_and_sanitization_use_same_boundary_rules(env):
     result = response.json()
     assert result["findings_before"] == scan(text)["findings"]
     assert result["clean"] and not result["findings_after"]
-
-
-def test_drafts_expire_without_requests_and_clear_on_shutdown(env, monkeypatch):
-    _, app, _ = env
-    separate = create_app(app.state.settings)
-    drafts = separate.state.drafts
-    with TestClient(separate) as client:
-        identifier = sanitize_upload(
-            client, b"010-1234-5678", [{"action": "MASK", "targets": ["PHONE"]}]
-        ).json()["sanitize_id"]
-        drafts.entries[identifier] = replace(drafts.entries[identifier], deadline=0)
-        purged = Event()
-        original_purge = drafts.purge
-
-        def observed_purge():
-            original_purge()
-            purged.set()
-
-        monkeypatch.setattr(drafts, "purge", observed_purge)
-        assert purged.wait(3), "Periodic expiration did not run"
-        assert identifier not in drafts.entries
-        identifier = sanitize_upload(
-            client, b"010-1234-5678", [{"action": "MASK", "targets": ["PHONE"]}]
-        ).json()["sanitize_id"]
-        assert identifier in drafts.entries
-    assert not drafts.entries
-
-
-def test_draft_capacity_and_simultaneous_transfer_protection():
-    from errors import APIError
-    from sanitizer import Drafts
-
-    drafts = Drafts(ttl=600, max_bytes=10)
-    identifier = drafts.add(b"123456", "file.txt")
-    with pytest.raises(APIError) as capacity:
-        drafts.add(b"12345", "another.txt")
-    assert capacity.value.status == 503
-    assert drafts.checkout(identifier).content == b"123456"
-    with pytest.raises(APIError) as busy:
-        drafts.checkout(identifier)
-    assert busy.value.status == 409
-    drafts.finish(identifier, False)
-    assert drafts.checkout(identifier).content == b"123456"
-    drafts.finish(identifier, True)
-    assert not drafts.entries

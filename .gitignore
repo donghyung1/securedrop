@@ -15,4 +15,5 @@ __pycache__/
 *.bundle
 *.pem
 *.key
+backend/dist/
 SecureDrop_Cloud_PRD_*.txt

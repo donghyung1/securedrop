@@ -1,96 +1,159 @@
-import json
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timezone
-from pathlib import Path
+"""DynamoDB persistence. TTL is cleanup only; callers enforce expiry on reads."""
+
+from datetime import datetime, timedelta, timezone
+from functools import cached_property, wraps
+from uuid import uuid4
+
+import boto3
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import BotoCoreError, ClientError
+
+from errors import APIError
 
 
-def now() -> datetime:
+def now():
     return datetime.now(timezone.utc)
 
 
-class Store:
-    def __init__(self, path: Path):
-        self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
-            conn.executescript("""
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS transfers (
-                    id TEXT PRIMARY KEY, object_key TEXT NOT NULL,
-                    expires_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL,
-                    event TEXT NOT NULL, types TEXT NOT NULL, source TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS rate_limits (
-                    identity TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL
-                );
-            """)
-
-    @contextmanager
-    def connect(self):
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
+def aws_errors(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
         try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
+            return fn(*args, **kwargs)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise APIError(
+                    409, "STATE_CONFLICT", "상태가 변경되었습니다. 다시 확인하세요."
+                ) from exc
+            raise APIError(502, "STORAGE_ERROR", "저장소 요청에 실패했습니다.") from exc
+        except BotoCoreError as exc:
+            raise APIError(502, "STORAGE_ERROR", "저장소 요청에 실패했습니다.") from exc
 
-    @staticmethod
-    def event(conn, event: str, types: list[str], source: str):
-        conn.execute(
-            "INSERT INTO events(time,event,types,source) VALUES(?,?,?,?)",
-            (now().isoformat(), event, json.dumps(sorted(set(types))), source),
+    return wrapped
+
+
+class Store:
+    def __init__(self, settings):
+        self.settings = settings
+
+    @cached_property
+    def resource(self):
+        return boto3.Session(
+            profile_name=self.settings.aws_profile, region_name=self.settings.aws_region
+        ).resource("dynamodb")
+
+    def table(self, kind):
+        return self.resource.Table(getattr(self.settings, f"table_{kind}"))
+
+    @aws_errors
+    def get(self, kind, key):
+        return self.table(kind).get_item(Key=key, ConsistentRead=True).get("Item")
+
+    @aws_errors
+    def put(self, kind, item):
+        self.table(kind).put_item(Item=item)
+
+    @aws_errors
+    def delete(self, kind, key):
+        self.table(kind).delete_item(Key=key)
+
+    def transfer(self, identifier):
+        return self.get("transfers", {"transfer_id": identifier})
+
+    @aws_errors
+    def transition(self, identifier, expected, target, **fields):
+        names = {"#status": "status"}
+        values = {":expected": expected, ":target": target}
+        updates = ["#status = :target"]
+        for i, (key, value) in enumerate(fields.items()):
+            names[f"#f{i}"] = key
+            values[f":v{i}"] = value
+            updates.append(f"#f{i} = :v{i}")
+        condition = "#status = :expected"
+        if target == "ACTIVE":
+            condition += " AND expires_at > :now"
+            values[":now"] = now().isoformat()
+        return self.table("transfers").update_item(
+            Key={"transfer_id": identifier},
+            UpdateExpression="SET " + ", ".join(updates),
+            ConditionExpression=condition,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
+        )["Attributes"]
+
+    @aws_errors
+    def count_download(self, identifier):
+        self.table("transfers").update_item(
+            Key={"transfer_id": identifier},
+            UpdateExpression="ADD download_count :one",
+            ConditionExpression="#s = :active AND expires_at > :now",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":one": 1, ":active": "ACTIVE", ":now": now().isoformat()},
         )
 
-    def log(self, event: str, types: list[str], source: str):
-        with self.connect() as conn:
-            self.event(conn, event, types, source)
+    def log(self, event, types, source, request_id=""):
+        timestamp = now()
+        self.put(
+            "events",
+            {
+                "day": timestamp.date().isoformat(),
+                "ts#uuid": timestamp.isoformat() + "#" + uuid4().hex,
+                "time": timestamp.isoformat(),
+                "event": event,
+                "types": sorted(set(types)),
+                "source": source,
+                "request_id": request_id,
+                "ttl": int((timestamp + timedelta(days=30)).timestamp()),
+            },
+        )
 
-    def logs(self, limit: int):
-        with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT time,event,types,source FROM events ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
-        return [{**dict(row), "types": json.loads(row["types"])} for row in rows]
+    @aws_errors
+    def query_day(self, kind, day, limit=None):
+        kwargs = {
+            "KeyConditionExpression": Key("day" if kind == "events" else "created_day").eq(day),
+            "ScanIndexForward": False,
+        }
+        if kind == "transfers":
+            kwargs["IndexName"] = "day-created-index"
+        if limit:
+            kwargs["Limit"] = limit
+        rows = []
+        while True:
+            result = self.table(kind).query(**kwargs)
+            rows.extend(result["Items"])
+            if "LastEvaluatedKey" not in result or (limit and len(rows) >= limit):
+                return rows[:limit] if limit else rows
+            kwargs["ExclusiveStartKey"] = result["LastEvaluatedKey"]
+            if limit:
+                kwargs["Limit"] = limit - len(rows)
 
-    def transfer(self, identifier: str):
-        with self.connect() as conn:
-            row = conn.execute("SELECT * FROM transfers WHERE id=?", (identifier,)).fetchone()
-        return dict(row) if row else None
-
-    def save_transfer(self, identifier, key, expires_at, types, source):
-        with self.connect() as conn:
-            conn.execute(
-                "INSERT INTO transfers(id,object_key,expires_at) VALUES(?,?,?)",
-                (identifier, key, expires_at),
+    @aws_errors
+    def login_update(self, admin, success):
+        failures = int(admin.get("failed_count", 0))
+        locked = int(admin.get("locked_until", 0))
+        if locked and locked <= int(now().timestamp()):
+            failures = 0
+        count = 0 if success else failures + 1
+        until = (
+            0
+            if success
+            else (
+                int(now().timestamp()) + self.settings.admin_login_lock_sec
+                if count >= self.settings.admin_login_max_fails
+                else 0
             )
-            self.event(conn, "TRANSFER", types, source)
-
-    def revoke(self, identifier, source):
-        with self.connect() as conn:
-            cursor = conn.execute(
-                "UPDATE transfers SET revoked=1 WHERE id=? AND revoked=0", (identifier,)
-            )
-            if cursor.rowcount:
-                self.event(conn, "REVOKE", [], source)
-
-    def allow_plugin(self, identity: str, timestamp: float) -> bool:
-        # SQLite serializes this transaction across threads and worker processes.
-        with self.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT window,count FROM rate_limits WHERE identity=?", (identity,)
-            ).fetchone()
-            if row is None or timestamp - row["window"] >= 60:
-                conn.execute(
-                    "INSERT OR REPLACE INTO rate_limits VALUES(?,?,1)", (identity, timestamp)
-                )
-                return True
-            if row["count"] >= 30:
-                return False
-            conn.execute("UPDATE rate_limits SET count=count+1 WHERE identity=?", (identity,))
-            return True
+        )
+        self.table("admins").update_item(
+            Key={"username": admin["username"]},
+            UpdateExpression="SET failed_count = :count, locked_until = :until",
+            ConditionExpression="password_hash = :hash AND failed_count = :old AND locked_until = :lock",
+            ExpressionAttributeValues={
+                ":count": count,
+                ":until": until,
+                ":hash": admin["password_hash"],
+                ":old": admin.get("failed_count", 0),
+                ":lock": admin.get("locked_until", 0),
+            },
+        )
+        return until
