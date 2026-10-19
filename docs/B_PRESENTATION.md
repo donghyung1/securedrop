@@ -6,7 +6,7 @@ AI 챗봇에 민감정보가 **전송되기 직전에 막고**, 막은 기록은
 
 ## 시연 순서 (약 3분)
 
-시연 5분 전에 `https://3bpmban7il.execute-api.ap-northeast-2.amazonaws.com/prod/api/health`를 한 번 열어 예열합니다(콜드 스타트 방지).
+시연 5분 전에 `<apiBase>/api/health`를 한 번 열어 예열합니다(콜드 스타트 방지). `apiBase`는 배포된 웹의 `config.js`나 `deploy_serverless.py` 출력에서 확인합니다.
 
 | 순서 | 할 일 | 보여줄 것 |
 |---|---|---|
