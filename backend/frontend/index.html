@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>SecureDrop · 테스트 콘솔</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/config.js" defer></script>
+  <script src="/api.js" defer></script>
+  <script src="/app.js" defer></script>
 </head>
 <body>
   <main>
@@ -20,10 +22,10 @@
         <p id="scan-result" role="status">주민등록번호 · 전화번호 · 이메일 · 키 · 카드번호 탐지</p>
       </section>
       <section><p class="eyebrow">02 / FILE TRANSFER</p><h2>파일 공유</h2>
-        <label for="file">전송할 파일 (최대 20 MiB)</label><input id="file" type="file" accept=".txt,.csv,.json,.md,.log,.xml,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.gif,.webp">
+        <label for="file">전송할 파일 (TXT·CSV 최대 4 MiB / 그 외 20 MiB)</label><input id="file" type="file" accept=".txt,.csv,.json,.md,.log,.xml,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.gif,.webp">
         <label for="expiry">링크 유효 시간</label><select id="expiry"><option value="300">5분</option><option value="600" selected>10분</option><option value="3600">1시간</option></select>
         <button id="upload" type="button" disabled>검사 후 링크 만들기</button>
-        <p>TXT·CSV는 선택 즉시 최대 5 MiB까지 검사하며, 민감정보 탐지 시 마스킹 또는 삭제할 수 있습니다. 다른 형식은 검사 미지원 확인 후 전송합니다.</p>
+        <p>TXT·CSV는 선택 즉시 최대 4 MiB까지 검사하며, 민감정보 탐지 시 마스킹 또는 삭제할 수 있습니다. 다른 형식은 검사 미지원 확인 후 전송합니다.</p>
         <div id="sensitive" hidden>
           <p id="findings" class="warning"></p>
           <div id="sanitize-actions" class="actions"><button id="mask" type="button">모두 마스킹</button><button id="remove" class="secondary" type="button">탐지 값 모두 삭제</button></div>
@@ -32,6 +34,7 @@
         </div>
         <div id="draft" hidden><h3>처리본 미리보기</h3><p id="draft-result"></p><pre id="preview"></pre>
           <label class="check"><input id="approve" type="checkbox"> 미리보기를 확인했고 처리본 전송에 동의합니다.</label>
+          <label id="draft-risk-label" class="check" hidden><input id="draft-risk" type="checkbox"> 남은 민감정보를 확인했으며 공유 위험을 이해했습니다.</label>
           <div class="actions"><button id="send-draft" type="button" disabled>처리본 링크 만들기</button><button id="cancel" class="secondary" type="button">처리본 폐기</button></div>
         </div>
       </section>
@@ -43,9 +46,7 @@
         <a id="download" target="_blank" rel="noopener noreferrer">다운로드 열기</a>
         <div class="actions"><button id="copy" type="button">링크 복사</button><button id="revoke" class="danger" type="button">전송 폐기</button></div><p id="transfer-status" role="status"></p></div></div>
     </section>
-    <details><summary>연결 설정</summary><label for="api-key">API Key (선택, 현재 탭의 메모리에만 보관)</label><input id="api-key" type="password" autocomplete="off" placeholder="허용된 Origin에서는 입력하지 않아도 됩니다">
-      <p>인증 오류가 나면 서버의 ALLOWED_ORIGINS에 현재 주소의 Origin을 추가하거나 테스트 API Key를 입력하세요. 키 사용 시 분당 30회 제한이 적용됩니다.</p></details>
-    <footer>SecureDrop 테스트 콘솔 · <a href="/docs">API 문서</a> · 입력 내용은 브라우저 저장소에 저장하지 않습니다.</footer>
+    <footer>SecureDrop 테스트 콘솔 · <a id="api-docs" href="http://localhost:8000/docs">API 문서</a> · 입력 내용은 브라우저 저장소에 저장하지 않습니다.</footer>
   </main>
 </body>
 </html>

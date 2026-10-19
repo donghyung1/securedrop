@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import boto3
 import pytest
+from botocore.stub import Stubber
 from fastapi.testclient import TestClient
 from mangum import Mangum
 from moto import mock_aws
@@ -645,3 +646,23 @@ def test_scanning_and_sanitization_use_same_boundary_rules(env):
     result = response.json()
     assert result["findings_before"] == scan(text)["findings"]
     assert result["clean"] and not result["findings_after"]
+
+
+def test_missing_s3_upload_without_list_bucket_permission_stays_pending(env):
+    client, app, _ = env
+    pending = issue(client).json()
+    storage = app.state.storage
+    with Stubber(storage.client) as stub:
+        stub.add_client_error(
+            "head_object",
+            service_error_code="403",
+            http_status_code=403,
+            expected_params={
+                "Bucket": app.state.settings.s3_bucket,
+                "Key": pending["uploads"][0]["fields"]["key"],
+            },
+        )
+        response = client.post(f"/api/transfers/{pending['id']}/complete", headers=managed(pending))
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "UPLOAD_INCOMPLETE"
+    assert app.state.store.transfer(pending["id"])["status"] == "PENDING_UPLOAD"

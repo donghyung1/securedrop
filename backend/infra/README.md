@@ -1,6 +1,6 @@
 # PRD v1.3 서버리스 배포 런북
 
-이 디렉터리는 v1.3용입니다. `../deploy/`는 이전 EC2 배포 이력이므로 새 배포에 사용하지 않습니다. 스크립트는 직접 실행해야 AWS 리소스를 변경합니다. 이번 코드 수정 과정에서는 실제 계정에 배포하지 않았습니다.
+이 디렉터리는 v1.3용입니다. `../deploy/`는 이전 EC2 배포 이력이므로 새 배포에 사용하지 않습니다. 스크립트는 직접 실행해야 AWS 리소스를 변경합니다. 기존 데모 도메인을 유지하는 자동 배포는 `deploy_serverless.py`를 사용합니다. 실행 명령과 검증 절차는 [백엔드 README](../README.md#데모-서버리스-배포)를 참고하세요.
 
 ## 1. 환경과 DynamoDB
 
@@ -35,7 +35,7 @@ sd_transfers에는 `day-created-index` GSI(created_day HASH, created_at RANGE, A
 - CORS origin은 CloudFront와 개발용 localhost만 허용합니다. Methods GET/POST, AllowedHeaders `*`, ExposeHeaders ETag, MaxAgeSeconds 3000.
 - Lambda 실행 역할에 이 버킷의 `transfers/*`에 대한 s3:PutObject/GetObject/DeleteObject만 부여합니다. HeadObject는 GetObject 권한을 사용합니다.
 
-웹 버킷은 CloudFront OAC를 통해서만 읽도록 제한합니다. HTTPS redirect, HSTS, nosniff, DENY frame 정책, CSP를 적용하고 connect-src에는 API Gateway와 전송 S3 주소를 허용합니다. API를 CloudFront로 프록시하지 않습니다. `PUBLIC_BASE_URL`은 이 CloudFront origin입니다. 다운로드 페이지 `d.html` 등 정적 화면은 새 API 계약에 맞춰 구현·배포해야 합니다.
+웹 버킷은 CloudFront OAC를 통해서만 읽도록 제한합니다. HTTPS redirect, HSTS, nosniff, DENY frame 정책, CSP를 적용하고 connect-src에는 API Gateway와 전송 S3 주소를 허용합니다. API를 CloudFront로 프록시하지 않습니다. `PUBLIC_BASE_URL`은 이 CloudFront origin입니다. `../frontend/`의 `d.html` 수신 페이지와 데모 화면은 새 API 계약을 사용하며 자동 배포 시 이 웹 버킷에 업로드합니다.
 
 ## 3. Lambda 패키지
 

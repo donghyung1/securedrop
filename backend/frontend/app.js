@@ -2,6 +2,9 @@
 const $ = (id) => document.getElementById(id);
 const labels = { RRN: "주민등록번호", PHONE: "전화번호", EMAIL: "이메일", AWS_ACCESS_KEY: "AWS 키", API_KEY: "API 키", CARD: "카드번호" };
 let draftId = null;
+let draftFile = null;
+let scanResult = null;
+let draftClean = true;
 let transfer = null;
 let findings = [];
 let busy = false;
@@ -9,21 +12,14 @@ let scanReady = false;
 const scanExtensions = new Set(["txt", "csv"]);
 const describe = (items) => items.map((item) => `${labels[item.type] || item.type} ${item.count}건`).join(" · ");
 
-async function api(path, options = {}) {
-  const headers = new Headers(options.headers);
-  if ($("api-key").value.trim()) headers.set("X-API-Key", $("api-key").value.trim());
-  const response = await fetch(path, { ...options, headers, cache: "no-store", referrerPolicy: "no-referrer" });
-  const data = await response.json();
-  if (!response.ok) throw Object.assign(new Error(data.error?.message || `요청 실패 (${response.status})`), { data, status: response.status });
-  return data;
-}
 
 function sync() {
   $("upload").disabled = busy || !scanReady || !$("sensitive").hidden || !$("file").files.length || Boolean(draftId) || Boolean(transfer);
   $("original").disabled = busy || !$("risk").checked || (Boolean(draftId) && !$("approve").checked);
-  $("send-draft").disabled = busy || !draftId || !$("approve").checked;
+  $("send-draft").disabled = busy || !draftId || (!$("approve").checked || (!draftClean && !$("draft-risk").checked));
   $("file").disabled = busy || Boolean(draftId) || Boolean(transfer);
-  $("api-key").disabled = busy;
+  $("expiry").disabled = busy;
+  for (const id of ["risk", "approve", "draft-risk"]) $(id).disabled = busy;
   for (const id of ["scan", "sample", "mask", "remove", "cancel", "revoke", "copy"]) $(id).disabled = busy;
 }
 
@@ -47,40 +43,40 @@ function clearSensitive() {
 }
 
 async function send(confirmSensitive = false) {
-  const form = new FormData();
-  if (draftId) form.set("sanitize_id", draftId);
-  else form.set("file", $("file").files[0]);
-  form.set("expires_in", $("expiry").value);
-  form.set("user_approved", "true");
-  form.set("confirm_sensitive", String(confirmSensitive));
-  const extension = $("file").files[0]?.name.split(".").pop().toLowerCase();
-  form.set("confirm_unscanned", String(confirmSensitive && !scanExtensions.has(extension)));
+  const file = draftFile || $("file").files[0];
+  const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())), (b) => b.toString(16).padStart(2, "0")).join("");
+  const extension = file.name.split(".").pop().toLowerCase();
+  const payload = {
+    files: [{ name: file.name, size: file.size, type: file.type || "application/octet-stream", sha256 }],
+    expires_in: Number($("expiry").value),
+    user_approved: Boolean(draftId && $("approve").checked),
+    acknowledge_risk: confirmSensitive || Boolean(draftId && $("draft-risk").checked),
+    acknowledge_unsupported: confirmSensitive && !scanExtensions.has(extension),
+    ...(draftId ? { sanitize_id: draftId } : scanResult ? { scan_id: scanResult.scan_id } : {}),
+  };
+  const pending = await api("/api/transfers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   try {
-    transfer = await api("/api/transfers", { method: "POST", body: form });
+    const form = new FormData();
+    for (const [key, value] of Object.entries(pending.uploads[0].fields)) form.append(key, value);
+    form.append("file", file);
+    const uploaded = await fetch(pending.uploads[0].url, { method: "POST", body: form, referrerPolicy: "no-referrer" });
+    if (!uploaded.ok) throw new Error(`파일 업로드 실패 (${uploaded.status})`);
+    const completed = await api(`/api/transfers/${pending.id}/complete`, { method: "POST", headers: { "X-Manage-Token": pending.manage_token } });
+    transfer = { ...completed, manage_token: pending.manage_token };
   } catch (error) {
-    if (error.status !== 409 && !(error.status === 415 && error.data.confirmation_required)) throw error;
-    findings = error.data.findings || [];
-    $("findings").textContent = error.status === 415 ? "이 형식은 민감정보 검사를 지원하지 않습니다. 내용을 직접 확인한 후 전송하세요." : `민감정보 발견: ${describe(findings)}`;
-    $("sensitive").hidden = false;
-    $("sanitize-actions").hidden = !error.data.sanitize_available;
-    $("risk").checked = false;
-    $("status").textContent = "전송이 중단되었습니다. 정제하거나 위험을 확인하세요.";
-    return;
+    try { await api(`/api/transfers/${pending.id}`, { method: "DELETE", headers: { "X-Manage-Token": pending.manage_token } }); }
+    catch { transfer = pending; $("transfer").hidden = false; $("revoke").hidden = false; $("transfer-status").textContent = "업로드 정리에 실패했습니다. 전송 폐기를 다시 눌러주세요."; }
+    throw error;
   }
-  draftId = null;
-  $("draft").hidden = true;
-  $("preview").textContent = "";
+  discard();
   clearSensitive();
   $("qr").src = transfer.qr;
   $("save-qr").href = transfer.qr;
   $("save-qr").hidden = false;
-  $("download").href = transfer.download_url;
-  $("download").hidden = false;
-  $("qr").hidden = false;
-  $("copy").hidden = false;
-  $("revoke").hidden = false;
+  $("download").href = transfer.share_url;
+  for (const id of ["download", "qr", "copy", "revoke"]) $(id).hidden = false;
   $("expires").textContent = `만료: ${new Date(transfer.expires_at).toLocaleString("ko-KR")}`;
-  $("transfer-status").textContent = "링크를 가진 사람은 누구나 다운로드할 수 있습니다.";
+  $("transfer-status").textContent = "링크를 가진 사람은 누구나 다운로드할 수 있습니다. 이 탭에서 전송을 폐기할 수 있습니다.";
   $("transfer").hidden = false;
   $("status").textContent = "전송 완료. 새 파일을 전송하려면 현재 전송을 폐기하거나 페이지를 새로 여세요.";
 }
@@ -93,6 +89,12 @@ async function sanitize(action) {
   form.set("actions", JSON.stringify([{ action, targets: Object.keys(labels) }]));
   const result = await api("/api/sanitize", { method: "POST", body: form });
   draftId = result.sanitize_id;
+  const bytes = Uint8Array.from(atob(result.content_b64), (c) => c.charCodeAt(0));
+  const original = $("file").files[0];
+  draftFile = new File([bytes], original.name, { type: original.type || "text/plain" });
+  draftClean = result.clean;
+  $("draft-risk").checked = false;
+  $("draft-risk-label").hidden = result.clean;
   $("preview").textContent = result.preview;
   $("draft-result").textContent = result.clean ? "재검사 완료: 탐지된 민감정보 없음" : `남은 민감정보: ${describe(result.findings_after)}`;
   $("approve").checked = false;
@@ -101,15 +103,14 @@ async function sanitize(action) {
   $("status").textContent = "처리본은 아직 업로드되지 않았습니다. 미리보기 확인 후 전송하세요.";
 }
 
-async function discard() {
-  if (draftId) {
-    try { await api(`/api/sanitize/${draftId}`, { method: "DELETE" }); }
-    catch (error) { if (error.status !== 410) throw error; }
-  }
+function discard() {
   draftId = null;
+  draftFile = null;
+  draftClean = true;
   $("draft").hidden = true;
   $("preview").textContent = "";
   $("approve").checked = false;
+  $("draft-risk").checked = false;
 }
 
 $("sample").onclick = () => { $("text").value = "테스트 연락처: 010-1234-5678\n이메일: demo@example.com"; };
@@ -121,6 +122,7 @@ $("scan").onclick = () => run(async () => {
 $("file").onchange = () => run(async () => {
   clearSensitive();
   scanReady = false;
+  scanResult = null;
   const file = $("file").files[0];
   if (file && (!file.size || file.size > 20 * 1024 * 1024)) {
     $("file").value = "";
@@ -135,9 +137,11 @@ $("file").onchange = () => run(async () => {
     $("status").textContent = "검사 미지원 파일입니다. 전송하려면 별도로 확인하세요.";
     return;
   }
+  if (file.size > 4 * 1024 * 1024) throw new Error("TXT·CSV 검사·전송은 최대 4 MiB입니다. 더 작은 파일을 선택하세요.");
   const form = new FormData();
   form.set("file", file);
   const result = await api("/api/scan/file", { method: "POST", body: form });
+  scanResult = result;
   scanReady = true;
   findings = result.findings;
   if (result.blocked) {
@@ -152,13 +156,28 @@ $("original").onclick = () => run(() => send(true));
 $("mask").onclick = () => run(() => sanitize("MASK"));
 $("remove").onclick = () => run(() => sanitize("DELETE"));
 $("send-draft").onclick = () => run(() => send());
-$("cancel").onclick = () => run(async () => { await discard(); clearSensitive(); $("status").textContent = "처리본을 폐기했습니다."; });
+$("cancel").onclick = () => run(async () => {
+  discard();
+  clearSensitive();
+  if (scanResult?.blocked) {
+    findings = scanResult.findings;
+    $("findings").textContent = `민감정보 발견: ${describe(findings)}`;
+    $("sanitize-actions").hidden = false;
+    $("sensitive").hidden = false;
+  }
+  $("status").textContent = "처리본을 폐기했습니다. 원본을 정제하거나 다른 파일을 선택하세요.";
+});
 $("risk").onchange = sync;
 $("approve").onchange = sync;
-$("copy").onclick = () => run(async () => { await navigator.clipboard.writeText(transfer.download_url); $("status").textContent = "다운로드 링크를 복사했습니다."; });
+$("draft-risk").onchange = sync;
+$("api-docs").href = window.SECUREDROP_API_BASE + "/docs";
+$("copy").onclick = () => run(async () => { await navigator.clipboard.writeText(transfer.share_url); $("status").textContent = "다운로드 링크를 복사했습니다."; });
 $("revoke").onclick = () => run(async () => {
-  await api(`/api/transfers/${transfer.id}`, { method: "DELETE" });
+  await api(`/api/transfers/${transfer.id}`, { method: "DELETE", headers: { "X-Manage-Token": transfer.manage_token } });
   transfer = null;
+  scanReady = false;
+  scanResult = null;
+  $("file").value = "";
   $("download").removeAttribute("href");
   $("qr").removeAttribute("src");
   $("save-qr").removeAttribute("href");
@@ -166,7 +185,7 @@ $("revoke").onclick = () => run(async () => {
   $("transfer-status").textContent = "전송이 폐기되었습니다.";
   $("status").textContent = "파일을 다시 선택하여 새 링크를 만들 수 있습니다.";
 });
-fetch("/api/health", { cache: "no-store" }).then((response) => {
+fetch(window.SECUREDROP_API_BASE + "/api/health", { cache: "no-store" }).then((response) => {
   if (!response.ok) throw new Error();
   $("health").textContent = "● 서버 연결됨";
 }).catch(() => { $("health").textContent = "서버 연결 실패"; });

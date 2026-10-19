@@ -67,7 +67,7 @@ Lambda는 Python 3.12 x86_64, `handler.handler`, 메모리 1024MB, 제한 시간
 
 ## v1.2에서의 전환
 
-`frontend/`와 `extension/`은 기존 클라이언트 소스입니다. 이번 변경은 백엔드 범위이며 기존 화면은 새 API에 맞춰 별도로 연결해야 합니다. Lambda에서 정적 페이지를 제공하지 않습니다. 정적 파일은 S3 웹 버킷과 CloudFront로 배포하고, 프론트에서 API Gateway 주소를 직접 호출해야 합니다. 특히 다음 계약이 변경되었습니다.
+`backend/frontend/` 데모는 v1.3 API에 연결되어 검사·정제·승인·S3 직접 업로드·공유·폐기를 지원합니다. `extension/`은 별도 클라이언트 소스입니다. Lambda에서 정적 페이지를 제공하지 않습니다. 정적 파일은 S3 웹 버킷과 CloudFront로 배포하고, 프론트에서 API Gateway 주소를 직접 호출해야 합니다. 특히 다음 계약이 변경되었습니다.
 
 - 전송: multipart 파일 업로드 → JSON 메타데이터 발급 → S3 직접 POST → `/complete`.
 - 정제: 서버 메모리 보관 → `content_b64`를 브라우저가 보관·업로드. 기존 정제 DELETE API는 제거했습니다.
@@ -77,7 +77,7 @@ Lambda는 Python 3.12 x86_64, `handler.handler`, 메모리 1024MB, 제한 시간
 - 플러그인: `/plugin/*` → `/api/plugin/*`. 키 검증·호출 한도는 API Gateway 사용량 계획으로 이동했습니다.
 - 설정: `SCAN_FILE_MAX_MB=5` → `4`, `FILES_BUCKET` 사용. `DATABASE_PATH`, `SANITIZE_MEMORY_MB`, `SANITIZE_TTL_SEC`, `PLUGIN_API_KEY`는 제거했습니다.
 
-기존 `deploy/`의 EC2 프로비저닝·배포·검증 스크립트는 v1.2용 이력입니다. v1.3 배포에는 사용하지 마세요. 기존 SQLite 데이터를 자동 이관하거나 기존 AWS 리소스를 변경하지 않습니다.
+기존 `deploy/`의 EC2 프로비저닝·배포·검증 스크립트는 v1.2용 이력입니다. v1.3 배포에는 사용하지 마세요. 기존 SQLite 데이터는 자동 이관하지 않습니다. 새 서버리스 배포 스크립트는 기존 CloudFront의 원본을 웹 S3 버킷으로 전환합니다.
 
 ## 검증
 
@@ -88,3 +88,23 @@ uv run ruff format --check .
 ```
 
 모의 S3·DynamoDB 통합 테스트로 세션 공유·만료, 크기 상한, 서명 정책, 해시 불일치 삭제, 관리 토큰, 정제 승인, 폐기 경합, 관리자 인증·잠금·로그아웃, 개인정보 제외 응답, Mangum REST 이벤트·플러그인을 검증합니다. 실제 AWS 배포, S3 브라우저 POST, CloudFront 모바일 다운로드, 성능 목표는 배포 환경에서 추가 검증해야 합니다. 발급된 S3 GET URL은 폐기 이후에도 남은 서명 시간 동안 유효할 수 있으므로 객체 삭제로 접근을 차단합니다. 업로드 POST도 만료 전 재사용될 수 있지만 서명에 고정된 동일 바이트만 허용하며 폐기 상태는 다운로드 API에서 계속 차단합니다.
+
+## 데모 서버리스 배포
+
+기존 `deploy/aws/resources.json`의 계정·profile과 `deployment.json`의 CloudFront·도메인을 사용합니다. 기존 EC2 배포 스크립트 대신 다음 명령을 실행합니다.
+
+```powershell
+cd backend
+uv run pytest -q
+uv run python infra/package_lambda.py
+uv run python infra/deploy_serverless.py
+# CloudFront 상태가 Deployed가 된 후
+uv run python infra/configure_monitoring.py --profile default --api-id <serverless.json의 api_id>
+uv run --with pillow python infra/verify_serverless.py
+uv run --with playwright python -m playwright install chromium
+uv run --with playwright python infra/verify_browser.py
+```
+
+배포 상태와 검증 결과는 git에서 제외된 `deploy/aws/serverless.json`, `serverless-verification.json`, `browser-verification.json`에 저장합니다. 기존 CloudFront 설정은 `cloudfront-before-serverless.json`으로 보관합니다. 스크립트는 기존 EC2를 자동 종료하지 않습니다. 검증 완료 후 해당 instance ID를 확인해 종료하고 연결된 Elastic IP를 해제하세요.
+
+정적 데모는 별도 웹 S3 버킷과 CloudFront OAC로 제공합니다. `frontend/config.js`의 로컬 기본 API 주소는 배포 시 API Gateway 주소로 바뀝니다. 로컬 화면은 `python -m http.server 5500 --directory frontend`로 열 수 있습니다. TXT·CSV는 4MiB까지, 그 외 지원 형식은 위험 확인 후 20MiB까지 단일 파일을 전송합니다. 관리 토큰과 정제 바이트는 현재 탭 메모리에만 보관하므로 탭을 닫으면 폐기 권한을 잃으며 링크는 정해진 시각에 만료됩니다.

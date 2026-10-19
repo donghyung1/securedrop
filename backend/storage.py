@@ -22,7 +22,15 @@ class Storage:
         return boto3.Session(
             profile_name=self.settings.aws_profile,
             region_name=self.settings.aws_region,
-        ).client("s3", config=Config(signature_version="s3v4", retries={"max_attempts": 2}))
+        ).client(
+            "s3",
+            endpoint_url=f"https://s3.{self.settings.aws_region}.amazonaws.com",
+            config=Config(
+                signature_version="s3v4",
+                retries={"max_attempts": 2},
+                s3={"addressing_style": "virtual"},
+            ),
+        )
 
     @aws_errors
     def upload_post(self, item):
@@ -52,7 +60,15 @@ class Storage:
         try:
             head = self.client.head_object(Bucket=self.settings.s3_bucket, Key=item["s3_key"])
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            # Without ListBucket permission S3 hides a missing object with 403.
+            # Treat an unreadable upload as incomplete; never activate it.
+            if exc.response["Error"]["Code"] in (
+                "403",
+                "AccessDenied",
+                "404",
+                "NoSuchKey",
+                "NotFound",
+            ):
                 raise APIError(409, "UPLOAD_INCOMPLETE", "업로드가 완료되지 않았습니다.") from exc
             raise
         if head["ContentLength"] != item["size"]:
