@@ -34,6 +34,8 @@ const ERROR_MESSAGES = {
   INTERNAL_ERROR: "서버 오류가 발생했습니다.",
   NETWORK_ERROR: "서버에 연결할 수 없습니다.",
   S3_UPLOAD_FAILED: "파일 업로드에 실패했습니다. 다시 시도하세요.",
+  INSECURE_CONTEXT: "이 주소에서는 파일을 확인할 수 없습니다. https:// 또는 http://localhost 주소로 열어 주세요.",
+  CLIENT_ERROR: "브라우저에서 처리 중 오류가 발생했습니다. 새로고침 후 다시 시도하세요.",
 };
 
 export class ApiError extends Error {
@@ -54,6 +56,8 @@ export const extOf = (name) => (name.split(".").pop() || "").toLowerCase();
 export const mimeOf = (file) => file.type || "application/octet-stream";
 
 export async function sha256Hex(blob) {
+  // Web Crypto(subtle)는 보안 컨텍스트(HTTPS·localhost)에서만 제공된다. IP 주소 http 접속 등에서는 없다.
+  if (!globalThis.crypto?.subtle) throw new ApiError("INSECURE_CONTEXT", null, 0);
   const buf = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

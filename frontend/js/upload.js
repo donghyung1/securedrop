@@ -384,7 +384,8 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
     guard.showSent(name);
     showTransfer(done, { onNew: reset });
   } catch (e) {
-    const err = e instanceof ApiError ? e : new ApiError("INTERNAL_ERROR");
+    // 서버 응답이 아닌 브라우저 내부 오류를 "서버 오류"로 보이지 않게 구분
+    const err = e instanceof ApiError ? e : new ApiError("CLIENT_ERROR");
     setProgress(null);
     errBox.textContent = err.userMessage;
     errBox.hidden = false;
