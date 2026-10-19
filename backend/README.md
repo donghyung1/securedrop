@@ -111,7 +111,7 @@ cd backend
 uv run python deploy/verify_live.py
 ```
 
-프로비저닝 스크립트는 지정 버킷의 보안·수명 주기 정책과 `securedrop-cloud-backend` Role의 전용 inline policy를 설정합니다. 이 프로젝트 전용 리소스에만 사용하세요. EC2 인스턴스나 HTTPS 서버는 생성하지 않습니다. 리소스 정보와 적용한 정책은 `deploy/aws/`에 기록합니다. 실제 S3 검증은 작은 파일을 업로드하고 서명 URL 다운로드·익명 접근 차단·암호화·폐기 후 접근 차단을 확인한 뒤 객체를 삭제합니다. 해당 테스트는 실제 AWS API를 호출합니다.
+프로비저닝 스크립트는 지정 버킷의 보안·수명 주기 정책과 `securedrop-cloud-backend` Role의 전용 inline policy를 설정합니다. 이 프로젝트 전용 리소스에만 사용하세요. EC2 인스턴스나 HTTPS 서버는 생성하지 않습니다. 리소스 정보와 적용한 정책은 Git에서 제외되는 로컬 `deploy/aws/`에 기록합니다. 공개용 `deploy/aws-examples/`는 가상 계정 ID와 버킷명을 사용하는 형식 예시입니다. 실제 S3 검증은 작은 파일을 업로드하고 서명 URL 다운로드·익명 접근 차단·암호화·폐기 후 접근 차단을 확인한 뒤 객체를 삭제합니다. 해당 테스트는 실제 AWS API를 호출합니다.
 
 - 서울 리전의 비공개 S3 버킷을 준비하고 Block Public Access 전체 활성화, 기본 SSE-S3 암호화, 생성 1일 뒤 만료하는 수명 주기를 설정하세요. 앱은 업로드마다 `AES256` 암호화를 명시합니다.
 - IAM Role은 `arn:aws:s3:::버킷이름/transfers/*`에 대한 `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`만 필요합니다. 앱에 AWS 키를 넣지 않습니다. SDK 기본 자격 증명 체인과 CLI profile/IAM Role을 사용합니다.
