@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import Settings
+from infra.cors import configure_gateway_responses, extension_origin, update_lambda_origins
 from infra.create_tables import create_tables
 from store import Store
 
@@ -83,6 +84,23 @@ def main():
     ]
     if "--frontend-only" in sys.argv:
         deploy_frontend(s3, cf, account, files, web, distribution, STATE["api_base"])
+        return
+    origins = list(
+        dict.fromkeys(
+            [
+                *origins,
+                *Settings().allowed_origins,
+                extension_origin(ROOT.parent / "extension" / "manifest.json"),
+            ]
+        )
+    )
+    if "--cors-only" in sys.argv:
+        applied = update_lambda_origins(lam, "securedrop-api", origins)
+        configure_gateway_responses(api, STATE["api_id"])
+        api.create_deployment(
+            restApiId=STATE["api_id"], stageName="prod", description="SecureDrop CORS update"
+        )
+        log("CORS updated: " + ",".join(applied))
         return
     save(
         region=REGION,
@@ -387,24 +405,7 @@ def main():
                 if attempt == 11:
                     raise
                 time.sleep(30)
-    for kind, code, message in [
-        ("DEFAULT_4XX", "VALIDATION_ERROR", "Request rejected"),
-        ("DEFAULT_5XX", "STORAGE_ERROR", "Service unavailable"),
-        ("INVALID_API_KEY", "UNAUTHORIZED", "API key required"),
-        ("THROTTLED", "RATE_LIMITED", "Too many requests"),
-        ("QUOTA_EXCEEDED", "RATE_LIMITED", "Quota exceeded"),
-    ]:
-        api.put_gateway_response(
-            restApiId=api_id,
-            responseType=kind,
-            responseParameters={
-                "gatewayresponse.header.Access-Control-Allow-Origin": f"'{base}'",
-                "gatewayresponse.header.Access-Control-Allow-Headers": "'Content-Type,X-API-Key,X-Manage-Token,Authorization'",
-            },
-            responseTemplates={
-                "application/json": json.dumps({"error": {"code": code, "message": message}})
-            },
-        )
+    configure_gateway_responses(api, api_id)
     api.create_deployment(restApiId=api_id, stageName="prod", description="SecureDrop v1.3")
     patches = [
         {"op": "replace", "path": path, "value": value}

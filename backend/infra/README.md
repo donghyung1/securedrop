@@ -65,7 +65,9 @@ stage 기본은 20 rps / burst 40입니다. 플러그인 사용량 계획 `plugi
 
 OPTIONS는 모든 관련 리소스에서 API Key 없이 Lambda로 프록시해야 FastAPI CORS가 동작합니다. binary media types에 `multipart/form-data`를 추가하고 배포합니다. Lambda 동기 호출 한도 때문에 파일 입력은 4MiB이며 20MiB 전송은 S3로 직접 보냅니다.
 
-DEFAULT_4XX/DEFAULT_5XX Gateway Response는 앱과 같은 `{"error":{"code":"...","message":"..."}}` JSON 형식과 실제 CloudFront의 Access-Control-Allow-Origin을 설정합니다. INVALID_API_KEY/THROTTLED/QUOTA_EXCEEDED도 각각 UNAUTHORIZED/RATE_LIMITED로 매핑하세요. API Key 거절은 API Gateway 단계에서 403일 수 있습니다. 요청·응답 본문 data tracing은 비활성화합니다.
+DEFAULT_4XX/DEFAULT_5XX 및 UNAUTHORIZED(401), ACCESS_DENIED/INVALID_API_KEY(403), THROTTLED/QUOTA_EXCEEDED(429) Gateway Response는 앱과 같은 `{"error":{"code":"...","message":"..."}}` JSON 형식을 사용합니다. 오류의 Access-Control-Allow-Origin은 `method.request.header.Origin`으로 매핑하여 콘솔·확장 각각의 origin을 반환하고, Vary: Origin과 Cache-Control: no-store를 설정합니다. 이 매핑은 일반적인 게이트웨이 오류 문구를 모든 origin에서 읽도록 허용하며 credentials는 허용하지 않습니다. 애플리케이션 데이터와 OPTIONS는 Lambda의 명시적 ALLOWED_ORIGINS로 계속 제한합니다. [AWS 헤더 매핑 문서](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-gateway-responses.responseParameters.html)를 참고하세요. 요청·응답 본문 data tracing은 비활성화합니다.
+
+배포 스크립트는 `extension/manifest.json`의 고정 공개키에서 확장 origin을 계산하고 `.env`의 ALLOWED_ORIGINS와 함께 반영합니다. CORS 설정만 기존 배포에 적용하려면 백엔드 폴더에서 `uv run python infra/deploy_serverless.py --cors-only`를 실행합니다. 이 모드는 기존 Lambda 환경 변수를 보존하고 허용 origin을 추가한 뒤 Gateway Response를 설정하여 prod stage를 재배포합니다.
 
 접근 로그 그룹은 `/apigw/securedrop-api`입니다. 로그 필드는 requestId, ip, httpMethod, resourcePath, status, responseLatency만 포함하고 토큰·헤더·쿼리·본문은 기록하지 않습니다. resourcePath 템플릿을 사용하며 실제 다운로드 URL을 남기지 않습니다. REST API에서 CloudWatch Logs 역할은 계정별 API Gateway 설정이 필요합니다.
 

@@ -6,7 +6,9 @@ ChatGPT(`chatgpt.com`) 또는 Claude(`claude.ai`) 입력창에서 전송 버튼 
 
 1. API를 실행하거나 배포 주소를 확인합니다. (`backend/README.md` 참고)
 2. `chrome://extensions` → 개발자 모드 켜기 → **압축해제된 확장 프로그램을 로드합니다** → 이 `extension/` 폴더 선택
-3. 로드된 확장의 **ID**를 복사해 Lambda 환경 변수(로컬은 `backend/.env`) `ALLOWED_ORIGINS`에 `chrome-extension://<ID>`를 추가하고 재배포(재시작)합니다.
+3. 이 확장은 `manifest.json`의 공개키로 ID를 `cbamkobbnpomdhcfndaenamfpoldkcno`로 고정합니다. 자동 배포는 이 키에서 origin을 계산하여 Lambda `ALLOWED_ORIGINS`에 추가합니다. 로컬은 `backend/.env`에 `chrome-extension://cbamkobbnpomdhcfndaenamfpoldkcno`를 추가하고 서버를 재시작합니다. 기존에 키 없이 설치했다면 확장을 제거한 뒤 다시 로드하고 ID를 확인하세요. 기존 확장 설정은 다시 입력해야 할 수 있습니다.
+
+공개키는 압축해제 설치의 ID 유지용이며 비밀값이 아닙니다. Chrome 웹 스토어 배포 시에는 스토어에서 부여한 공개키로 교체하고 origin을 다시 배포해야 합니다. [Chrome 문서](https://developer.chrome.com/docs/extensions/reference/manifest/key)를 참고하세요.
 4. 툴바 아이콘 → **API 주소**(`https://<api-id>.execute-api.ap-northeast-2.amazonaws.com/prod`)와 **웹 주소**(CloudFront)를 입력하고 **저장 후 연결 확인**을 누릅니다.
    기본값은 `config.js` 한 곳에서 바꿉니다(로컬 `http://localhost:8000` / `http://localhost:5500`).
 

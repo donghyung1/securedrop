@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import boto3
@@ -15,6 +16,7 @@ from auth import password_hash, token_hash, verify_password
 from config import Settings
 from detector import scan, scan_file
 from errors import APIError
+from infra.cors import extension_origin
 from infra.create_tables import create_tables
 from main import create_app
 from store import Store, now
@@ -48,6 +50,29 @@ def scan_upload(client, content=b"hello", name="sample.txt"):
     response = client.post("/api/scan/file", files={"file": (name, content)})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def test_extension_cors_preflight_and_auth_error(env):
+    _, app, _ = env
+    origin = extension_origin(Path(__file__).resolve().parents[2] / "extension" / "manifest.json")
+    app.state.settings.allowed_origins = [origin]
+    with TestClient(create_app(app.state.settings, app.state.storage, app.state.store)) as client:
+        response = client.options(
+            "/api/scan",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
+        response = client.get("/api/admin/stats", headers={"Origin": origin})
+        assert response.status_code == 401
+        assert response.headers["access-control-allow-origin"] == origin
+        response = client.get("/api/admin/stats", headers={"Origin": "https://untrusted.example"})
+        assert response.status_code == 401
+        assert "access-control-allow-origin" not in response.headers
 
 
 def issue(client, content=b"hello", name="sample.txt", **kwargs):

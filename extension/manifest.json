@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkB6v13zoq9YJ1Xq4gcpOadjgfjpsEuBLh8qyNwfYnaO7UbjgPTW2sE8pdBFQYLqRGWFmmlCO0IU07IYQrzJzQ1xShl+oGC9ZCLO0Mn0iN9ouOO7+d/LyFNhQDL6PYzs7YmV6ZvCt2cji7WrQncE+ewdajHds0pivBB6a3DMWBbJG6hKWN/9UxEN8FN8XsIDdkRORbV8QZUvYDn7hUoso3nLeSKjaon6IYKeji2eiRqaT8rpvz/GfXLccDYVL23xYJde9TQ3cUSIG7Qr1NiQ6k5CW7+XsOApInoBc+e8/XWy88jVmZUbPFOftsji6cVolHgqCxgDPk0Znp8Qe2mvLxQIDAQAB",
   "name": "SecureDrop Guard",
   "version": "1.3.0",
   "description": "AI 챗봇에 개인정보·기밀을 전송하기 전에 SecureDrop 서버로 검사하고, 감지되면 전송을 차단합니다.",
