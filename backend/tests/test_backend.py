@@ -92,6 +92,30 @@ def test_scan_validation_privacy_and_health(env):
     assert client.get("/api/logs", headers=ORIGIN).json() == {"items": []}
 
 
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+    ],
+)
+def test_local_frontend_origins(env, origin):
+    client, _, _ = env
+    response = client.post("/api/scan", json={"text": "hello"}, headers={"Origin": origin})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+@pytest.mark.parametrize("origin", [None, "null", "https://evil.test", "http://127.0.0.1:9999"])
+def test_unapproved_origins_still_require_key(env, origin):
+    client, _, _ = env
+    headers = {"Origin": origin} if origin is not None else {}
+    response = client.post("/api/scan", json={"text": "hello"}, headers=headers)
+    assert response.status_code == 401
+
+
 def test_frontend_serves_assets_without_exposing_backend_files(env):
     client, _, _ = env
     response = client.get("/")

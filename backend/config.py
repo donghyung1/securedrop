@@ -16,7 +16,12 @@ class Settings(BaseSettings):
     sanitize_ttl_sec: int = Field(default=600, ge=1, le=3600)
     sanitize_memory_mb: int = Field(default=100, ge=20, le=1024)
     plugin_api_key: SecretStr = SecretStr("")
-    allowed_origins: list[str] = ["http://localhost:5500", "http://localhost:8000"]
+    allowed_origins: list[str] = [
+        "http://localhost:5500",
+        "http://localhost:8000",
+        "http://127.0.0.1:5500",
+        "http://127.0.0.1:8000",
+    ]
     database_path: Path = Path("data/securedrop.db")
 
     @model_validator(mode="after")
