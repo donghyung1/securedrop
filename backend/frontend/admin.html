@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>SecureDrop · 관리자 콘솔</title>
+  <link rel="stylesheet" href="admin.css">
+  <script src="config.js" defer></script>
+  <script src="admin.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">SECUREDROP CLOUD / ADMIN</p><h1>관리자 콘솔</h1></div>
+      <button id="logout" type="button" class="secondary" hidden>로그아웃</button>
+    </header>
+
+    <section id="login-view">
+      <h2>관리자 로그인</h2>
+      <form id="login-form" autocomplete="off">
+        <label for="username">아이디</label>
+        <input id="username" name="username" type="text" autocomplete="username" required maxlength="64">
+        <label for="password">비밀번호</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+        <button type="submit">로그인</button>
+      </form>
+      <p id="login-msg" role="status"></p>
+    </section>
+
+    <div id="console-view" hidden>
+      <p class="notice">파일명·내용·다운로드 링크는 표시되지 않습니다. 시각은 UTC 기준입니다.</p>
+
+      <section>
+        <div class="bar">
+          <h2>현황</h2>
+          <label for="days" class="inline">기간</label>
+          <select id="days"><option value="1">오늘</option><option value="7">최근 7일</option></select>
+          <button id="refresh" type="button" class="secondary">새로고침</button>
+        </div>
+        <div class="cards" id="by-event"></div>
+        <div class="two">
+          <div><h3>탐지 유형별</h3><ul id="by-type" class="kv"></ul></div>
+          <div><h3>출처별</h3><ul id="by-source" class="kv"></ul></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>최근 이벤트</h2>
+        <table><thead><tr><th>시각</th><th>이벤트</th><th>유형</th><th>출처</th></tr></thead><tbody id="events"></tbody></table>
+      </section>
+
+      <section>
+        <div class="bar">
+          <h2>활성 전송</h2>
+          <label for="status" class="inline">상태</label>
+          <select id="status"><option value="ACTIVE">ACTIVE</option><option value="PENDING_UPLOAD">PENDING_UPLOAD</option><option value="REVOKED">REVOKED</option></select>
+        </div>
+        <table><thead><tr><th>ID</th><th>크기</th><th>생성</th><th>만료</th><th>다운로드</th><th>상태</th><th>암호화</th><th></th></tr></thead><tbody id="transfers"></tbody></table>
+      </section>
+
+      <p><a id="cw-link" href="#" target="_blank" rel="noopener noreferrer" hidden>CloudWatch 대시보드 (AWS 콘솔 로그인 필요)</a></p>
+      <p id="console-msg" role="status"></p>
+    </div>
+  </main>
+</body>
+</html>
