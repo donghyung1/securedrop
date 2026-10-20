@@ -56,7 +56,7 @@ PRD는 AWS 핵심 서비스 6개(S3, Lambda, API Gateway, DynamoDB, CloudFront, 
 ## 설명 멘트 (핵심 5가지)
 
 1. **서버리스**: CloudFront → API Gateway → Lambda → DynamoDB·S3 구조입니다. 켜 둔 서버가 없어서 쓰지 않을 때 비용이 거의 들지 않습니다.
-2. **S3는 모두 비공개**: 두 버킷 모두 Block Public Access 4개가 켜져 있고, 기본 암호화(SSE-S3)와 TLS 강제를 적용했습니다. 파일은 1일 뒤 자동 삭제됩니다.
+2. **S3는 모두 비공개**: 두 버킷 모두 Block Public Access 4개가 켜져 있고, TLS 강제를 적용했습니다. 파일 버킷은 고객 관리형 KMS 키(SSE-KMS), 웹 버킷은 SSE-S3로 암호화합니다. 파일은 1일 뒤 자동 삭제됩니다.
 3. **최소 권한**: Lambda 역할은 S3 `transfers/*`의 Put/Get/Delete, DynamoDB 5개 테이블, 자기 로그 그룹 쓰기만 가집니다. Scan 권한과 관리형 정책은 없습니다.
 4. **보이는 운영**: 로그 14일 보존, 대시보드 1개, 알람 2개. 관리자 콘솔에서 대시보드로 바로 이동합니다.
 5. **남기지 않음**: 이벤트에는 유형·시간만, 로그에는 원문·서명 URL·토큰이 없습니다. 비밀번호는 scrypt, 관리 토큰은 SHA-256 해시만 저장합니다.
@@ -78,7 +78,8 @@ PRD는 AWS 핵심 서비스 6개(S3, Lambda, API Gateway, DynamoDB, CloudFront, 
 | ------------------------------------------------- | ----------------------------------------------------------------------------- |
 | F13·10.8 로그 14일, 대시보드 1개, 알람 2개        | 로그 그룹 2개 14일, `SecureDrop-Demo`, 알람 2개 OK(알림 action 없음, PRD대로). 임계값은 1분·1건으로 PRD와 다름(한계 표) |
 | 13장 대시보드에서 차단·전송 건수 상승             | `BlockedCount` 각 2, `TransferCount` +1 확인                                  |
-| 10.2·7장 S3 퍼블릭 차단·SSE-S3·TLS·버전 관리 끔   | 두 버킷 모두 충족, 파일 버킷 `transfers/` 1일 만료                            |
+| 10.2·7장 S3 퍼블릭 차단·SSE-S3·TLS·버전 관리 끔   | 두 버킷 모두 충족(파일 버킷은 SSE-KMS로 강화, 아래 "PRD 비목표였으나 추가 적용"), `transfers/` 1일 만료 |
+| (추가) WAF·KMS CMK·CloudTrail                     | 실계정 적용, `verify_security.py`로 종단 점검 통과, 단위 테스트 78개 통과      |
 | 10.9 IAM 최소 권한                                | S3 `transfers/*` 3개 동작, 테이블 5개, 로그 쓰기만. Scan·관리형 정책 없음     |
 | 10.1·10.9 태그 `Project`, `Owner`                 | 19개 리소스 적용(대시보드는 태그 미지원)                                      |
 | 10.3·10.6·원칙 4 해시만 저장, 로그에 원문 없음    | 이벤트 185건·토큰 해시·로그 3,573건 검사 통과(위 숫자)                        |
@@ -122,18 +123,29 @@ PRD는 AWS 핵심 서비스 6개(S3, Lambda, API Gateway, DynamoDB, CloudFront, 
 | 게이트웨이 로그 역할 | `securedrop-apigateway-logs`의 로그 권한이 `Resource: *`. 계정 전체 API Gateway 로깅 역할의 일반적인 형태라 수용했습니다. PRD 10.9에는 이 역할 규정이 없습니다. | (제안) 계정 담당자와 협의 |
 | 비용 분리 | PRD 10.1은 "비용 확인을 태그로 한다"고 했지만, 공유 계정이고 비용 할당 태그 권한이 없어 프로젝트별 비용을 나눌 수 없습니다. | (제안) 비용 할당 태그 활성화. PRD 15장 Budgets는 비용 알림 용도 |
 
+### PRD 비목표였으나 추가 적용한 것 (WAF · KMS CMK · CloudTrail)
+
+PRD 2장은 WAF·KMS·CloudTrail을 비목표(향후 계획)로 뒀지만, PRD 범위를 넘어 추가로 구현하고 실계정에 적용했습니다. 설정은 `backend/infra/configure_security.py`(멱등, `--only kms waf cloudtrail`), 종단 점검은 `backend/infra/verify_security.py`, 테스트는 `backend/tests/test_security.py`입니다. `teardown.py`·`tag_resources.py`도 이 리소스를 다루도록 갱신했습니다.
+
+| 서비스     | 적용 내용 |
+| ---------- | --------- |
+| KMS        | 고객 관리형 키 `alias/securedrop-transfers`, 자동 교체 켬. 파일 버킷 기본 암호화는 SSE-KMS + S3 Bucket Key. 키 정책에서 Lambda 역할에는 `kms:GenerateDataKey`·`kms:Decrypt`만, `kms:ViaService=s3.ap-northeast-2.amazonaws.com`과 버킷 암호화 컨텍스트로 제한하며 IAM 쪽 KMS 권한은 없음. 브라우저 presigned POST는 서명 정책에 `x-amz-server-side-encryption=aws:kms`와 키 ID를 고정(`backend/storage.py:40-55`), 플러그인 경로 `put_object`도 KMS 사용(`storage.py:103-117`). 설정 `KMS_KEY_ID`(`backend/config.py:17`)가 비면 로컬 개발용 SSE-S3. 웹 버킷은 SSE-S3 유지 |
+| WAF        | WAFv2 REGIONAL 웹 ACL `securedrop-api-acl`을 API Gateway REST API `prod` 스테이지에 연결(CloudFront 아님). 규칙: AWSManagedRulesCommonRuleSet, KnownBadInputsRuleSet, AmazonIpReputationList, IP당 5분 3,000건 속도 제한(차단). 전체 로깅은 끄고 지표·샘플 요청만 사용. 기존 API Gateway 스로틀·사용량 계획도 유지 |
+| CloudTrail | 트레일 `securedrop-trail`, 다중 리전, 로그 파일 무결성 검증 켬. 관리 이벤트 + 파일 버킷 `transfers/` 접두사의 S3 데이터 이벤트만 기록. 전용 로그 버킷(퍼블릭 차단, BucketOwnerEnforced, SSE-S3, TLS만 허용, SourceArn 조건 버킷 정책, 90일 만료). 계정에 기존 트레일이 없어 관리 이벤트는 무료 첫 사본 |
+
+- **WAF Count 예외**: 이 서비스는 민감정보처럼 보이는 내용이 든 최대 4MiB 파일을 정상으로 받습니다. 그래서 CommonRuleSet의 `SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`, `EC2MetaDataSSRF_BODY`는 차단하지 않고 Count로 둡니다. `<script>`, `../`가 든 4MiB 검사 요청이 WAF를 통과함을 실계정에서 확인했습니다.
+- **속도 제한 근거**: 한 행사장 IP 뒤 청중 약 100명 × 약 15회 호출 ≈ 1,500건으로 3,000건 아래입니다. 악용 IP 하나는 약 10 rps로 묶이며 스테이지 스로틀 20 rps보다 낮습니다.
+- **월 비용 추정**: KMS 약 $1, WAF 약 $9~10, CloudTrail 약 $0(저장 소액 별도) → 월 약 $10~11. 위 "비용"의 $0.07은 이 적용 전 수치입니다.
+
 ### 이번에 하지 않은 것 (PRD 2장 비목표 = 향후 계획)
 
-PRD는 아래 AWS 서비스를 일부러 뺐고, 발표에서 "향후 계획"으로 말하라고 합니다. 향후 도입 순서는 PRD 15장입니다.
+PRD는 아래 AWS 서비스를 일부러 뺐고, 발표에서 "향후 계획"으로 말하라고 합니다. 향후 도입 순서는 PRD 15장입니다. (WAF·KMS·CloudTrail은 위에서 추가 적용했으므로 제외)
 
 | 뺀 서비스       | 대신 한 것                                              |
 | --------------- | ------------------------------------------------------- |
-| WAF             | API Gateway 스로틀·사용량 계획, CORS 제한, 입력 검증    |
-| KMS             | S3 기본 암호화(SSE-S3)                                  |
 | EventBridge     | S3 수명 주기 1일 + 조회 시점 `expires_at` 비교          |
 | SQS·Step Functions | 검사 4MB 상한으로 동기 처리, 업로드 2단계 API        |
 | SES             | 이메일 발송 없음                                        |
-| CloudTrail      | 계정 기본 이벤트 기록(90일)만 사용                      |
 | CDK             | 스크립트 + 런북(`infra/`)                               |
 | Budgets         | 예약 동시성·스로틀 상한, 정리 체크리스트                |
 | Cognito         | 일반 사용자 로그인 없음, 관리자만 Lambda 자체 인증      |
@@ -163,13 +175,13 @@ PRD는 아래 AWS 서비스를 일부러 뺐고, 발표에서 "향후 계획"으
 - **"PRD와 뭐가 다른가요?"** PRD 8.1은 CloudFront를 API 프록시로 쓰지 않는다고 했는데, 관리자 API만 CloudFront를 거쳐 같은 도메인으로 호출합니다. 교차 출처 호출의 인증이 배포 환경에서 실패했기 때문입니다. 또 PRD는 사용자 지정 도메인을 범위 밖으로 뒀지만 기존 데모 도메인을 씁니다. 알람은 PRD의 5분·5건보다 민감한 1분·1건으로 두었습니다. 데모 트래픽이 적어 오류를 바로 보이게 하려는 것이고, 알림이 없어 부작용은 없습니다. 나머지 API는 PRD대로입니다.
 - **"왜 REST API인가요? HTTP API가 더 싸지 않나요?"** 플러그인에 필요한 API Key·사용량 계획을 HTTP API가 지원하지 않기 때문입니다(PRD 8.2).
 - **"20MB를 왜 S3로 바로 올리나요?"** Lambda 요청·응답 한도가 6MB라서, Lambda는 발급·검증·기록만 합니다. 실제 업로드 구간의 로그로 Lambda를 거치지 않음을 확인했습니다. 크기는 presigned POST의 `content-length-range`로 S3가 강제하고, 초과 시 400 EntityTooLarge를 확인했습니다.
-- **"WAF·KMS는 왜 안 썼나요?"** 5일 데모라 비목표로 뒀습니다. 대신 스로틀·사용량 계획과 SSE-S3를 씁니다. 도입 순서는 PRD 15장 향후 계획입니다.
+- **"WAF·KMS는 왜/어떻게 썼나요?"** PRD에서는 비목표였지만 추가로 적용했습니다. WAF는 API Gateway 앞에 관리형 규칙과 IP당 속도 제한을 두었고, 4MiB 파일에 민감해 보이는 내용이 들어 있어도 정상으로 받아야 해서 본문 검사 규칙 5개는 차단 대신 Count로 두었습니다(실계정에서 `<script>`·`../`가 든 4MiB 검사 통과 확인). 그 대신 속도 제한과 기존 스로틀로 막습니다. KMS는 고객 관리형 키로 파일을 암호화하고 Lambda 역할에는 S3를 통한 `GenerateDataKey`·`Decrypt`만 줍니다. 그래서 S3 읽기 권한만으로는 KMS 권한이 없으면 파일을 복호화할 수 없습니다. 추가 비용은 월 약 $10~11입니다.
 - **"만료 이벤트나 알림은요?"** EventBridge·SES는 쓰지 않았습니다. 만료는 조회 때 `expires_at`으로 판단하고, 파일은 S3 수명 주기가 1일 뒤 지웁니다. 알람은 콘솔 상태로만 봅니다.
 - **"로그·DB에 민감정보가 남지 않나요?"** 원칙 4에 따라 파일은 S3에만, 판단 기록은 DynamoDB에만, 운영 신호는 CloudWatch에만 둡니다. 14일치 로그 3,573건을 패턴 검사했고 오탐 외에는 없었습니다. `sd_transfers`에는 파일명만 있고(PRD 10.3 허용) 전송과 함께 TTL로 사라집니다.
 - **"IaC는 안 썼나요?"** CDK 없이 스크립트와 런북으로 재현합니다(PRD 비목표). API Gateway는 `apigw-export.json`으로 내보내 커밋했습니다.
 - **"콜드 스타트는요?"** 14일간 25회 중앙값 Init 1.84초, 최대 1.91초로 목표 3초 안입니다. 시연 전에 `/api/health`로 예열합니다.
 - **"파일이 S3에 계속 남나요?"** 아니요. `transfers/`는 1일 뒤 자동 삭제되고, 버킷은 퍼블릭 접근이 모두 차단되어 있습니다.
-- **"비용이 얼마나 드나요?"** 서버리스 관련은 약 $0.07입니다. 계정 전체 $186.27은 대부분 EC2 계열이고, 공유 계정이라 프로젝트별로는 나눌 수 없습니다.
+- **"비용이 얼마나 드나요?"** 서버리스 관련은 약 $0.07입니다(WAF·KMS·CloudTrail 적용 전 수치, 적용 후 추가 월 약 $10~11). 계정 전체 $186.27은 대부분 EC2 계열이고, 공유 계정이라 프로젝트별로는 나눌 수 없습니다.
 - **"발표 끝나면 AWS는요?"** 직후 API Key를 삭제하고, 이후 `teardown.py`로 전체를 정리합니다.
 
 ## 발표 전 확인할 것

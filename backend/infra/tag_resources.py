@@ -112,6 +112,35 @@ def main():
             ),
         ),
     ]
+    # Security resources exist only after configure_security.py has run.
+    kms_pairs = [{"TagKey": k, "TagValue": v} for k, v in tags.items()]
+    if "kms_key_id" in state:
+        kms = session.client("kms")
+        plan.append(
+            (
+                f"KMS key {state['kms_key_id']}",
+                lambda: kms.tag_resource(KeyId=state["kms_key_id"], Tags=kms_pairs),
+            )
+        )
+    if "waf_acl_arn" in state:
+        waf = session.client("wafv2")
+        plan.append(
+            (
+                f"WAF {state['waf_acl_arn']}",
+                lambda: waf.tag_resource(ResourceARN=state["waf_acl_arn"], Tags=pairs),
+            )
+        )
+    if "cloudtrail_arn" in state:
+        ct = session.client("cloudtrail")
+        plan.append(
+            (
+                f"CloudTrail {state['cloudtrail_arn']}",
+                lambda: ct.add_tags(ResourceId=state["cloudtrail_arn"], TagsList=pairs),
+            )
+        )
+        plan.append(
+            (f"S3 {state['cloudtrail_bucket']}", lambda: s3_tags(state["cloudtrail_bucket"]))
+        )
     for label, action in plan:
         print(("TAG  " if args.execute else "PLAN ") + label)
         if args.execute:

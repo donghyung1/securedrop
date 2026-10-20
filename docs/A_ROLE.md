@@ -18,7 +18,7 @@
 | 항목 | 파일 버킷 | 웹 버킷 |
 |---|---|---|
 | Block Public Access 4개 | ✅ 모두 true | ✅ 모두 true |
-| 기본 암호화 | ✅ SSE-S3(AES256), SSE-C 차단 | ✅ 동일 |
+| 기본 암호화 | ✅ SSE-KMS(고객 관리형 키 `alias/securedrop-transfers`, 자동 교체, S3 Bucket Key), SSE-C 차단. PRD는 KMS를 비목표로 뒀으나 추가 적용 | ✅ SSE-S3(AES256) 유지 |
 | TLS 강제 | ✅ `aws:SecureTransport=false` Deny | ✅ 동일 + CloudFront OAC만 GetObject |
 | 버전 관리 | ✅ 사용 안 함 | ✅ 사용 안 함 |
 | 수명 주기 | ✅ `transfers/` 1일 만료, 미완료 멀티파트 1일 | 해당 없음 |
@@ -26,7 +26,8 @@
 | CORS | ✅ 웹 도메인·CloudFront·localhost만, GET/POST | 없음 |
 | 공개 여부 | ✅ `IsPublic=false` | ✅ `IsPublic=false` |
 
-- **Lambda 역할** `securedrop-lambda-v13`: S3 `transfers/*`의 Put/Get/DeleteObject, DynamoDB 5개 테이블과 GSI의 Get/Put/Update/Delete/Query, 자기 로그 그룹 쓰기만 허용. Scan·관리형 정책 없음. ✅
+- **Lambda 역할** `securedrop-lambda-v13`: S3 `transfers/*`의 Put/Get/DeleteObject, DynamoDB 5개 테이블과 GSI의 Get/Put/Update/Delete/Query, 자기 로그 그룹 쓰기만 허용. Scan·관리형 정책 없음. KMS 권한은 IAM 정책이 아니라 키 정책에서만 `kms:GenerateDataKey`·`kms:Decrypt`로 부여하고 `kms:ViaService=s3.ap-northeast-2.amazonaws.com`과 버킷 암호화 컨텍스트로 제한. ✅
+- **WAF·CloudTrail (PRD 비목표였으나 추가 적용)**: WAFv2 REGIONAL 웹 ACL `securedrop-api-acl`을 API Gateway `prod` 스테이지에 연결(관리형 규칙 3종 + IP당 5분 3,000건 차단, 본문 검사 규칙 5개는 4MiB 민감 내용 파일 수용을 위해 Count, 전체 로깅 끔). CloudTrail `securedrop-trail`은 다중 리전·무결성 검증, 관리 이벤트 + `transfers/` S3 데이터 이벤트, 전용 로그 버킷(퍼블릭 차단, SSE-S3, TLS만, 90일 만료). 설정 `backend/infra/configure_security.py`, 실계정 점검 `backend/infra/verify_security.py`, 테스트 `backend/tests/test_security.py`(단위 테스트 78개 통과). 월 추정 약 $10~11(KMS 약 $1, WAF 약 $9~10, CloudTrail 약 $0). ✅
 - **Lambda**: python3.12, 1024MB, 25초, 예약 동시성 10, Function URL 없음, 호출 권한은 해당 REST API ARN으로 제한. 환경 변수에 비밀값 없음(`ALLOWED_ORIGINS`, `APP_ENV`, `FILES_BUCKET`, `PUBLIC_BASE_URL`). ✅
 - **CORS 허용 origin**: 배포 Lambda `ALLOWED_ORIGINS`에 웹 도메인·확장 origin 외 `http://localhost:*`, `127.0.0.1`도 포함된다. 로컬 개발·테스트용으로 **유지하기로 결정**(팀).
 - **API Gateway**: stage 20/40, 로그인 1/5, 공개 경로 5/10 rps, data trace 끔, 사용량 계획 0.5/5·일 2,000회. ✅
@@ -60,7 +61,7 @@
 
 | 항목 | 결과 | 근거 |
 |---|---|---|
-| 20MiB 업로드가 Lambda를 거치지 않음 | ✅ | 01:32 UTC에 약 18MiB 더미 파일로 발급(200, 0.86초) → S3 POST(204, 3.0초, 업로드 호스트는 S3 버킷 도메인, SSE-S3·SHA-256 체크섬이 정책에 고정) → 완료(200, ACTIVE). 같은 구간 API Gateway·Lambda 로그에는 발급·완료·다운로드 조회·폐기 요청만 있고 업로드 본문 요청은 없음. Lambda 최대 메모리 약 140MB. 브라우저 네트워크 탭 대신 로그로 증명 |
+| 20MiB 업로드가 Lambda를 거치지 않음 | ✅ | 01:32 UTC에 약 18MiB 더미 파일로 발급(200, 0.86초) → S3 POST(204, 3.0초, 업로드 호스트는 S3 버킷 도메인, 당시 SSE-S3·SHA-256 체크섬이 정책에 고정. 이후 KMS 적용으로 SSE-KMS와 키 ID가 고정됨) → 완료(200, ACTIVE). 같은 구간 API Gateway·Lambda 로그에는 발급·완료·다운로드 조회·폐기 요청만 있고 업로드 본문 요청은 없음. Lambda 최대 메모리 약 140MB. 브라우저 네트워크 탭 대신 로그로 증명 |
 | 폐기 시 S3 객체 삭제 | ✅ | 폐기 전 head-object 성공·다운로드 206 → 폐기 API 200 REVOKED → 2초 후 head-object 404, `GET /api/d/{id}` 404. 테스트 전송 1건만 만들었고 폐기·삭제 완료 |
 
 - 위 업로드 구간의 4.3초는 참고값이다. 성능 공식 측정값 2.72초는 그대로 유지한다.

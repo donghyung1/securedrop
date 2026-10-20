@@ -37,9 +37,11 @@ class Storage:
         # Pin the checksum in the signed policy so reusing a POST cannot replace
         # a verified object with different bytes after /complete.
         checksum = base64.b64encode(bytes.fromhex(item["sha256"])).decode()
+        key_id = self.settings.kms_key_id
         fields = {
             "Content-Type": item["type"],
-            "x-amz-server-side-encryption": "AES256",
+            "x-amz-server-side-encryption": "aws:kms" if key_id else "AES256",
+            **({"x-amz-server-side-encryption-aws-kms-key-id": key_id} if key_id else {}),
             "x-amz-checksum-algorithm": "SHA256",
             "x-amz-checksum-sha256": checksum,
         }
@@ -103,7 +105,15 @@ class Storage:
             Key=item["s3_key"],
             Body=content,
             ContentType=item["type"],
-            ServerSideEncryption="AES256",
+            **(
+                {
+                    "ServerSideEncryption": "aws:kms",
+                    "SSEKMSKeyId": self.settings.kms_key_id,
+                    "BucketKeyEnabled": True,
+                }
+                if self.settings.kms_key_id
+                else {"ServerSideEncryption": "AES256"}
+            ),
         )
 
     @aws_errors

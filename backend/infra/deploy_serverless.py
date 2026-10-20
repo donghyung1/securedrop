@@ -139,12 +139,21 @@ def main():
         s3.put_bucket_ownership_controls(
             Bucket=bucket, OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]}
         )
-        s3.put_bucket_encryption(
-            Bucket=bucket,
-            ServerSideEncryptionConfiguration={
-                "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
-            },
+        # The transfer bucket uses the project CMK once configure_security.py has created
+        # it (state key kms_key_arn); the web bucket stays SSE-S3 for CloudFront OAC.
+        kms_arn = STATE.get("kms_key_arn") if bucket == files else None
+        rule = (
+            {
+                "ApplyServerSideEncryptionByDefault": {
+                    "SSEAlgorithm": "aws:kms",
+                    "KMSMasterKeyID": kms_arn,
+                },
+                "BucketKeyEnabled": True,
+            }
+            if kms_arn
+            else {"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}
         )
+        s3.put_bucket_encryption(Bucket=bucket, ServerSideEncryptionConfiguration={"Rules": [rule]})
     s3.put_bucket_lifecycle_configuration(
         Bucket=files,
         LifecycleConfiguration={
@@ -225,6 +234,8 @@ def main():
             },
         ],
     }
+    # KMS access for this role is granted by the key policy (configure_security.py),
+    # constrained to S3 and the transfer bucket; no IAM KMS statement is needed.
     arn = role(iam, "securedrop-lambda-v13", "lambda.amazonaws.com", policy)
     logs = SESSION.client("logs")
     for group in (f"/aws/lambda/{function}", "/apigw/securedrop-api"):
@@ -239,6 +250,8 @@ def main():
         "PUBLIC_BASE_URL": base,
         "ALLOWED_ORIGINS": ",".join(origins),
     }
+    if STATE.get("kms_key_arn"):
+        environment["KMS_KEY_ID"] = STATE["kms_key_arn"]
     package = (ROOT / "dist" / "securedrop-api.zip").read_bytes()
     try:
         lam.get_function(FunctionName=function)
@@ -520,9 +533,14 @@ def deploy_frontend(s3, cf, account, files, web, distribution, api_base):
             if path.name != "config.js"
             else (
                 "window.SD_CONFIG = "
-                + json.dumps({
-                    "apiBase": api_base, "adminApiBase": "", "defaultApiMode": "real", "cloudwatchUrl": cloudwatch_url
-                })
+                + json.dumps(
+                    {
+                        "apiBase": api_base,
+                        "adminApiBase": "",
+                        "defaultApiMode": "real",
+                        "cloudwatchUrl": cloudwatch_url,
+                    }
+                )
                 + ";\n"
             ).encode()
         )

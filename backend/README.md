@@ -104,11 +104,16 @@ uv run python infra/package_lambda.py
 uv run python infra/deploy_serverless.py
 # CloudFront 상태가 Deployed가 된 후
 uv run python infra/configure_monitoring.py --profile default --api-id <serverless.json의 api_id>
-uv run --with pillow python infra/verify_serverless.py
+# KMS 키(전송 버킷 SSE-KMS), WAF(API prod stage), CloudTrail. --deploy-code는 패키지된 Lambda 코드도 올립니다.
+uv run python infra/configure_security.py --profile default --deploy-code
+uv run python infra/verify_security.py --profile default
+uv run --with pillow --with zxing-cpp python infra/verify_serverless.py
 uv run --with playwright python -m playwright install chromium
 uv run --with playwright python infra/verify_browser.py
 ```
 
 배포 상태와 검증 결과는 git에서 제외된 `deploy/aws/serverless.json`, `serverless-verification.json`, `browser-verification.json`에 저장합니다. 기존 CloudFront 설정은 `cloudfront-before-serverless.json`으로 보관합니다. 스크립트는 기존 EC2를 자동 종료하지 않습니다. 검증 완료 후 해당 instance ID를 확인해 종료하고 연결된 Elastic IP를 해제하세요.
+
+보안 설정(`configure_security.py`, 멱등)은 다음을 적용합니다. (1) 전송 버킷 전용 고객 관리형 KMS 키(`alias/securedrop-transfers`, 자동 교체)로 SSE-KMS 기본 암호화와 S3 Bucket Key를 켜고, Lambda의 `KMS_KEY_ID` 환경 변수(키 ARN)를 설정합니다. 이 값이 있으면 S3 POST 서명 정책이 `aws:kms`와 키 ARN을 고정하고, 없으면(로컬) AES256을 유지합니다. 키 정책은 Lambda 역할에 `kms:GenerateDataKey`·`kms:Decrypt`만 S3 경유(`kms:ViaService`)·전송 버킷 암호화 컨텍스트 조건으로 허용합니다. 웹 버킷은 SSE-S3입니다. (2) API Gateway `prod` stage에 리전 WAFv2 `securedrop-api-acl`을 연결합니다(IP 평판, KnownBadInputs, CommonRuleSet, IP당 5분 3,000건 속도 제한). `/api/scan`이 4MiB multipart와 민감정보처럼 보이는 본문을 받으므로 CommonRuleSet의 본문 검사 규칙(SizeRestrictions_BODY, CrossSiteScripting_BODY, GenericLFI_BODY, GenericRFI_BODY, EC2MetaDataSSRF_BODY)은 Count로만 동작합니다. (3) 다중 리전 CloudTrail `securedrop-trail`(로그 파일 검증, 관리 이벤트, 전송 버킷 `transfers/` S3 데이터 이벤트)을 전용 로그 버킷에 90일 보관합니다. 일부만 적용하려면 `--only kms waf cloudtrail`을 사용합니다. 배포 스크립트를 다시 실행해도 `serverless.json`의 키 ARN이 있으면 KMS 설정을 유지합니다. `verify_security.py`는 암호화 객체(`ServerSideEncryption=aws:kms`), 4MiB 스캔의 WAF 미차단, 플러그인 경로, 트레일·WAF 연결을 확인합니다.
 
 웹 화면은 저장소 루트의 `frontend/`에서 JS·CSS 하위 폴더까지 웹 S3 버킷에 업로드하고 CloudFront OAC로 제공합니다. `backend/frontend/`는 이전 테스트 콘솔이며, 이 폴더에서는 `admin.html·js·css`만 함께 배포합니다. 루트 `frontend/config.js`는 배포 시 `window.SD_CONFIG`에 API Gateway 주소와 `defaultApiMode: real`을 설정합니다. 로컬에서는 기존 mock 기본값을 유지합니다. 백엔드 폴더에서 로컬 화면은 `python -m http.server 5500 --directory ../frontend`로 열 수 있습니다. TXT·CSV는 4MiB까지, 그 외 지원 형식은 위험 확인 후 20MiB까지 단일 파일을 전송합니다. 새 웹 화면의 정제·미리보기 연결은 현재 미구현입니다. `verify_serverless.py`는 배포 파일과 로컬 소스가 같은지 확인하며 `verify_browser.py`는 실제 검사·전송·다운로드·폐기와 모바일 화면을 검증합니다.

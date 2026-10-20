@@ -5,6 +5,7 @@ Run from backend. Without --execute this only prints the plan and tag checks.
   uv run python infra/teardown.py --api-key-only --execute --confirm ACCOUNT_ID
   uv run python infra/teardown.py --execute --confirm ACCOUNT_ID [--include-cloudfront]
 
+Also removes the WAF web ACL, CloudTrail trail + log bucket and (7-day scheduled) KMS key.
 Every resource must carry Project=securedrop or match an ID saved in
 deploy/aws/serverless.json. Anything else is skipped and reported.
 """
@@ -210,6 +211,84 @@ class Teardown:
                 lambda: cw.delete_dashboards(DashboardNames=[DASHBOARD]),
             )
 
+    def waf(self):
+        waf = self.s.client("wafv2")
+        name = self.state.get("waf_acl_name", "securedrop-api-acl")
+        found = [a for a in waf.list_web_acls(Scope="REGIONAL")["WebACLs"] if a["Name"] == name]
+        if not found:
+            return
+        acl = found[0]
+        tags = waf.list_tags_for_resource(ResourceARN=acl["ARN"])["TagInfoForResource"]
+        ok = tagged(tags.get("TagList")) or acl["Id"] == self.state.get("waf_acl_id")
+
+        def drop():
+            for arn in waf.list_resources_for_web_acl(
+                WebACLArn=acl["ARN"], ResourceType="API_GATEWAY"
+            )["ResourceArns"]:
+                waf.disassociate_web_acl(ResourceArn=arn)
+            lock = waf.get_web_acl(Name=name, Scope="REGIONAL", Id=acl["Id"])["LockToken"]
+            waf.delete_web_acl(Name=name, Scope="REGIONAL", Id=acl["Id"], LockToken=lock)
+
+        self.step(f"WAF web ACL {name} (disassociate first)", ok, drop)
+
+    def cloudtrail(self):
+        ct, s3 = self.s.client("cloudtrail"), self.s.resource("s3")
+        client = self.s.client("s3")
+        name = self.state.get("cloudtrail_name", "securedrop-trail")
+        trails = ct.describe_trails(trailNameList=[name], includeShadowTrails=False)["trailList"]
+        if trails:
+            arn = trails[0]["TrailARN"]
+            tags = ct.list_tags(ResourceIdList=[arn])["ResourceTagList"][0]["TagsList"]
+
+            def stop_and_delete():
+                ct.stop_logging(Name=name)
+                ct.delete_trail(Name=name)
+
+            self.step(
+                f"CloudTrail {name} (stop logging, delete)",
+                tagged(tags) or arn == self.state.get("cloudtrail_arn"),
+                stop_and_delete,
+            )
+        bucket = self.state.get("cloudtrail_bucket")
+        if bucket:
+            try:
+                tags = client.get_bucket_tagging(Bucket=bucket)["TagSet"]
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] == "NoSuchBucket":
+                    return
+                tags = []
+
+            def drop():
+                b = s3.Bucket(bucket)
+                b.object_versions.delete()
+                b.objects.delete()
+                b.delete()
+
+            self.step(f"S3 bucket {bucket} (CloudTrail logs, all objects)", tagged(tags), drop)
+
+    def kms(self):
+        kms = self.s.client("kms")
+        alias = self.state.get("kms_alias", "alias/securedrop-transfers")
+        try:
+            key = kms.describe_key(KeyId=alias)["KeyMetadata"]
+        except kms.exceptions.NotFoundException:
+            return
+        tags = [
+            {"Key": t["TagKey"], "Value": t["TagValue"]}
+            for t in kms.list_resource_tags(KeyId=key["KeyId"])["Tags"]
+        ]
+
+        def drop():
+            kms.delete_alias(AliasName=alias)
+            if key["KeyState"] != "PendingDeletion":
+                kms.schedule_key_deletion(KeyId=key["KeyId"], PendingWindowInDays=7)
+
+        self.step(
+            f"KMS key {key['KeyId']} ({alias}; delete alias, schedule deletion in 7 days)",
+            tagged(tags) or key["KeyId"] == self.state.get("kms_key_id"),
+            drop,
+        )
+
     def roles(self):
         iam = self.s.client("iam")
         gateway_role = self.s.client("apigateway").get_account().get("cloudwatchRoleArn", "")
@@ -260,6 +339,7 @@ def main():
     run = Teardown(session, state, args.execute)
     run.api_keys()
     if not args.api_key_only:
+        run.waf()
         run.gateway()
         run.function()
         if args.include_cloudfront:
@@ -269,6 +349,8 @@ def main():
                 "KEEP   CloudFront distribution, OAC and headers policy (use --include-cloudfront)"
             )
         run.buckets()
+        run.cloudtrail()
+        run.kms()
         run.tables()
         run.monitoring()
         run.roles()

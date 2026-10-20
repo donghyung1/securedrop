@@ -29,7 +29,7 @@ sd_transfers에는 `day-created-index` GSI(created_day HASH, created_at RANGE, A
 
 파일·웹 버킷 2개를 서울 리전에 생성하고 `Project=securedrop`, `Owner=<팀 담당자>` 태그를 붙입니다. 파일 버킷은 다음과 같이 구성합니다.
 
-- Block Public Access 4개 모두 활성화, BucketOwnerEnforced, SSE-S3 기본 암호화, 버전 관리 비활성화.
+- Block Public Access 4개 모두 활성화, BucketOwnerEnforced, 버전 관리 비활성화. 기본 암호화는 `configure_security.py`가 만든 고객 관리형 KMS 키(`alias/securedrop-transfers`)의 SSE-KMS + Bucket Key입니다(키 생성 전·로컬은 SSE-S3). 웹 버킷은 SSE-S3입니다.
 - `aws:SecureTransport=false` 요청을 버킷 정책으로 거부합니다.
 - `transfers/` 객체는 생성 1일 후 삭제하고 미완료 멀티파트 업로드도 1일 후 정리합니다.
 - CORS origin은 CloudFront와 개발용 localhost만 허용합니다. Methods GET/POST, AllowedHeaders `*`, ExposeHeaders ETag, MaxAgeSeconds 3000.
@@ -81,6 +81,19 @@ Lambda·게이트웨이 로그 그룹을 14일 보존하고 `SecureDrop-Demo` �
 
 배포된 REST API 정의는 `apigw-export.json`(OAS 3.0, API Gateway 확장 포함)에 보관합니다. 계정 ID와 REST API ID는 `<ACCOUNT_ID>`, `<REST_API_ID>`로 바꿨고 API Key 값은 내보내기에 포함되지 않습니다. 재생성은 `aws apigateway get-export --parameters extensions=apigateway --export-type oas30`으로 하며 같은 치환을 적용합니다.
 
+## 5-1. 보안 설정(KMS, WAF, CloudTrail)
+
+```powershell
+uv run python infra/configure_security.py --profile lab --deploy-code   # 멱등. --only kms waf cloudtrail 로 일부만
+uv run python infra/verify_security.py --profile lab
+```
+
+- **KMS**: 대칭 CMK, 자동 교체, alias `alias/securedrop-transfers`, `Project=securedrop`. 키 정책은 계정 루트 관리자와 Lambda 역할(`kms:GenerateDataKey`, `kms:Decrypt`만)을 허용하며 `kms:ViaService=s3.ap-northeast-2.amazonaws.com`과 `kms:EncryptionContext:aws:s3:arn`(전송 버킷)으로 제한합니다. Lambda IAM 정책에는 KMS 문장이 없습니다. 브라우저 S3 POST는 Lambda 역할이 서명하므로 S3가 이 역할의 권한으로 KMS를 호출합니다. Lambda 환경 변수 `KMS_KEY_ID`(키 ARN)가 `storage.py`의 POST 필드·조건(`x-amz-server-side-encryption=aws:kms`, `...-aws-kms-key-id`)과 `put_object`에 쓰입니다. 파일 버킷 정책은 `aws:SecureTransport` 거부만 있으며 암호화 방식 거부 규칙은 없습니다(기본 암호화로 충분). 키·ARN은 `serverless.json`(`kms_key_id`, `kms_key_arn`)에 기록됩니다.
+- **WAF**: REGIONAL Web ACL `securedrop-api-acl`(기본 Allow, 지표·샘플 요청 활성화)을 `prod` stage에 연결합니다. 규칙은 IP당 5분 3,000건 Block(행사장 한 IP의 청중 수백 명 사용과 stage 20 rps 스로틀을 고려한 값), AmazonIpReputationList, KnownBadInputsRuleSet, CommonRuleSet입니다. CommonRuleSet의 `SizeRestrictions_BODY`(8KB 초과), `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`, `EC2MetaDataSSRF_BODY`는 Count입니다(파일 본문 검사 오탐 방지). CloudFront용(us-east-1) ACL은 만들지 않았습니다. 요청 전체 로깅은 비용 때문에 켜지 않았습니다.
+- **CloudTrail**: `securedrop-trail`은 다중 리전, 로그 파일 검증, 관리 이벤트와 전송 버킷 `transfers/` 접두사의 S3 데이터 이벤트(고급 이벤트 선택기)를 기록합니다. 로그 버킷 `securedrop-cloudtrail-<계정>-ap-northeast-2`는 퍼블릭 차단, BucketOwnerEnforced, SSE-S3, 비 TLS 거부, `aws:SourceArn` 제한 정책, 90일 만료입니다. 기존 트레일이 있으면 관리 이벤트 두 번째 사본은 과금되므로 먼저 `aws cloudtrail describe-trails --include-shadow-trails`로 확인하세요.
+
+`deploy_serverless.py`를 다시 실행해도 `serverless.json`에 키가 있으면 SSE-KMS와 `KMS_KEY_ID`를 유지합니다. 순서는 배포 → `configure_security.py`입니다.
+
 ## 6. 배포 검증
 
 우선 `/prod/api/health`로 예열하고 `/prod/docs`를 엽니다. TXT 검사 → 마스킹 → content_b64 브라우저 보관 → 승인 → 메타데이터 발급 → 브라우저 S3 POST → 완료 → 공유 페이지 → 모바일 S3 다운로드 순서로 확인합니다. S3 POST는 응답 fields를 변경 없이 사용하고 file을 마지막 필드로 넣습니다.
@@ -91,7 +104,7 @@ Lambda·게이트웨이 로그 그룹을 14일 보존하고 `SecureDrop-Demo` �
 
 ## 7. 태그와 정리
 
-`uv run python infra/tag_resources.py --owner <담당자> --execute`는 S3·DynamoDB·Lambda·API Gateway(REST API·stage·사용량 계획·키)·로그 그룹·IAM 역할·알람·CloudFront에 `Project=securedrop`, `Owner`를 붙입니다. 기존 태그는 유지되며 대시보드는 태그를 지원하지 않습니다. `--execute`를 빼면 계획만 출력합니다.
+`uv run python infra/tag_resources.py --owner <담당자> --execute`는 S3·DynamoDB·Lambda·API Gateway(REST API·stage·사용량 계획·키)·로그 그룹·IAM 역할·알람·CloudFront와 보안 설정 리소스(KMS 키, WAF ACL, CloudTrail 트레일·로그 버킷)에 `Project=securedrop`, `Owner`를 붙입니다. 기존 태그는 유지되며 대시보드는 태그를 지원하지 않습니다. `--execute`를 빼면 계획만 출력합니다.
 
 `infra/teardown.py`는 기본적으로 계획만 출력합니다. 삭제 전에 `Project=securedrop` 태그 또는 `../deploy/aws/serverless.json`의 ID와 일치하는지 확인하고, 맞지 않는 리소스는 건너뜁니다.
 
@@ -102,4 +115,4 @@ uv run python infra/teardown.py --execute --confirm <계정 ID>                 
 uv run python infra/teardown.py --execute --confirm <계정 ID> --include-cloudfront
 ```
 
-전체 정리 대상은 API Key, 사용량 계획, REST API, Lambda, S3 버킷 2개(객체 포함), DynamoDB 테이블 5개, 로그 그룹 2개, 알람 2개, 대시보드, Lambda 역할입니다. CloudFront 배포는 기존 도메인을 쓰므로 `--include-cloudfront`를 줄 때만 비활성화 후 삭제합니다(약 15분 소요). OAC와 응답 헤더 정책도 이때 함께 삭제합니다. `securedrop-apigateway-logs` 역할은 계정 전체의 API Gateway 로그 역할로 등록되어 있으면 건너뜁니다. Route 53 레코드, ACM 인증서, EC2 시절의 `securedrop-cloud-backend` 역할과 `securedrop-cloud-<계정>-<리전>` 버킷은 수동으로 정리합니다.
+전체 정리 대상은 API Key, 사용량 계획, REST API, Lambda, S3 버킷 2개(객체 포함), WAF Web ACL(먼저 연결 해제), CloudTrail 트레일과 로그 버킷(객체 포함), KMS 키(alias 삭제 후 최소 대기 7일로 삭제 예약), DynamoDB 테이블 5개, 로그 그룹 2개, 알람 2개, 대시보드, Lambda 역할입니다. CloudFront 배포는 기존 도메인을 쓰므로 `--include-cloudfront`를 줄 때만 비활성화 후 삭제합니다(약 15분 소요). OAC와 응답 헤더 정책도 이때 함께 삭제합니다. `securedrop-apigateway-logs` 역할은 계정 전체의 API Gateway 로그 역할로 등록되어 있으면 건너뜁니다. Route 53 레코드, ACM 인증서, EC2 시절의 `securedrop-cloud-backend` 역할과 `securedrop-cloud-<계정>-<리전>` 버킷은 수동으로 정리합니다.

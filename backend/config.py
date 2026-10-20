@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     aws_region: str = "ap-northeast-2"
     aws_profile: str | None = None
     s3_bucket: str = Field(default="", validation_alias=AliasChoices("FILES_BUCKET", "s3_bucket"))
+    # Customer managed KMS key (ARN) for transfer objects. Empty keeps SSE-S3 (AES256),
+    # which is the local/dev default; the deploy sets it so uploads use SSE-KMS.
+    kms_key_id: str = ""
     public_base_url: AnyHttpUrl | None = None
     table_transfers: str = "sd_transfers"
     table_sessions: str = "sd_sessions"
