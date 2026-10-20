@@ -40,7 +40,7 @@ claude mcp add \
 
 - 확인: `claude mcp list`, 세션 안에서 `/mcp`
 - `--scope project`(`.mcp.json`)는 저장소에 커밋되므로 API Key가 들어가는 이 서버에는 쓰지 마세요.
-- 시연할 때는 Claude Code를 기본 권한 모드로 두세요. 자동 승인 모드에서는 도구 실행 승인 창이 뜨지 않아 사람 승인 단계가 사라집니다.
+- `create_transfer`에는 `_meta["anthropic/requiresUserInteraction"]`가 붙어 있어, Claude Code는 자동 승인 모드에서도 **매 호출마다 승인 창**을 띄웁니다("다시 묻지 않기" 없음). `dontAsk` 모드에서는 승인 대신 거부됩니다.
 - `create_transfer`는 권한 허용 목록(`mcp__securedrop__*` 등)에 넣지 마세요. 매번 승인을 받아야 PRD의 "호출 전 사용자 승인"이 지켜집니다. `scan_text`만 허용하려면 `mcp__securedrop__scan_text`를 지정합니다.
 
 ## 시연 시나리오

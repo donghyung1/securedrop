@@ -158,6 +158,8 @@ async def scan_text(text: str) -> dict:
         "민감정보가 있으면 전송하지 않는다. 최대 4MB, 만료 5·10·60분."
     ),
     annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True),
+    # Claude Code: 권한 모드(자동 승인 포함)와 관계없이 매 호출마다 사용자 승인 창을 띄운다 (PRD F4)
+    meta={"anthropic/requiresUserInteraction": True},
 )
 async def create_transfer(
     ctx: Context,
