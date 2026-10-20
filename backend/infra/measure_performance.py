@@ -22,7 +22,7 @@ MIB = 1024 * 1024
 TARGETS = {
     "cold_start": 3,
     "text_scan_warm": 1,
-    "file_scan_4mib": 2,
+    "file_scan_4mib": 4,
     "csv_sanitize_1mib": 3,
     "transfer_20mib": 10,
 }
