@@ -52,8 +52,9 @@ cd frontend && python3 -m http.server 5500
 - [x] `d.html` 휴대폰 다운로드 (만료 410·폐기 404 화면)
 - [x] 여정 3~4: SecureGuard 버튼·유형별 조치(마스킹/삭제/그대로) → `/api/sanitize` → 재검사·상위 20행 미리보기 → 승인 후 처리본 전송(`sanitize_id`, `user_approved`). 남은 민감정보는 추가 정제 또는 `acknowledge_risk`
 - [x] SecureGuard 자연어 요청(`/api/assist`): 해석 결과를 정제 선택 화면에 채우고 사용자가 확정. 모호·부정 요청은 버튼으로 되묻기
-- [ ] 플러그인 도구 (Day 4)
-- [ ] 선택: 내 전송 목록(F11), 다중 파일(F10), 브라우저 E2EE(F12)
+- [x] 플러그인 도구 (Day 4): MCP `scan_text`·`create_transfer`
+- [x] 선택: 브라우저 E2EE(F12)
+- [ ] 선택: 내 전송 목록(F11), 다중 파일(F10)
 
 ## 브라우저 암호화 (F12, 선택)
 
