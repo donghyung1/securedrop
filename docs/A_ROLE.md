@@ -32,7 +32,7 @@
 - **CORS 허용 origin**: 배포 Lambda `ALLOWED_ORIGINS`에 웹 도메인·확장 origin 외 `http://localhost:*`, `127.0.0.1`도 포함된다. 로컬 개발·테스트용으로 **유지하기로 결정**(팀).
 - **API Gateway**: stage 20/40, 로그인 1/5, 공개 경로 5/10 rps, data trace 끔, 사용량 계획 0.5/5·일 2,000회. ✅
 - **API Gateway 로그 역할** `securedrop-apigateway-logs`: 로그 권한이 `Resource: *`. 계정 전체 API Gateway 로깅 역할의 일반적인 형태이므로 수용한다.
-- **태그** ✅: 2026-10-20 `infra/tag_resources.py --owner dh1 --execute`로 19개 리소스(S3 2, DynamoDB 5, Lambda, API Gateway 4, 로그 그룹 2, IAM 역할 2, 알람 2, CloudFront)에 `Project=securedrop`, `Owner=dh1`을 적용했다. 이전에 태그가 없던 CloudFront 배포와 API stage 포함, 기존 태그는 유지. 대시보드는 태그 미지원.
+- **태그** ✅: 2026-10-20 `infra/tag_resources.py --owner dh1 --execute`로 리소스에 `Project=securedrop`, `Owner=dh1`을 적용했다(최초 19개, 보안 강화 후 현재 23개: S3 3(웹·파일·CloudTrail 로그), DynamoDB 5, Lambda 1, API Gateway 4, 로그 그룹 2, 알람 2, WAF ACL 1, KMS 키 1, CloudTrail 트레일 1, CloudFront 1은 태그 API로 확인한 21개이고, IAM 역할 2는 `iam list-role-tags`로 따로 확인). 이전에 태그가 없던 CloudFront 배포와 API stage 포함, 기존 태그는 유지. 대시보드는 태그 미지원.
 
 ## 저장 데이터·로그 (10.3, 10.6, 원칙 4)
 
@@ -86,7 +86,7 @@
 ## API 내보내기·정리 (10.11~10.13, Day 2·5)
 
 - `backend/infra/apigw-export.json`: prod stage OAS 3.0 내보내기. 계정·API ID를 치환했고 API Key 값은 들어 있지 않다. ✅
-- `backend/infra/teardown.py`: 기본은 계획만 출력하고, 태그·ID가 확인된 리소스만 삭제한다. 발표 직후 `--api-key-only`로 API Key만 삭제할 수 있다. 계획 실행 결과 19개 대상과 건너뛰는 항목 1개를 확인했다. 실제 삭제는 하지 않았다. ✅
+- `backend/infra/teardown.py`: 기본은 계획만 출력하고, 태그·ID가 확인된 리소스만 삭제한다. 발표 직후 `--api-key-only`로 API Key만 삭제할 수 있다. 보안 강화 후 계획 실행 결과 20개 대상과 건너뛰는 항목 1개(`securedrop-apigateway-logs`)를 확인했다(CloudFront는 `--include-cloudfront` 시에만 대상). 실제 삭제는 하지 않았다. ✅
 - 관리자 API 경로: CloudFront `/api/admin/*` 프록시를 유지하기로 하고 이유를 런북 2절에 기록했다. 발표 자료에 PRD 8.1과 다른 점으로 명시해야 한다.
 
 ## 비용·정리 대상 (Day 5)
