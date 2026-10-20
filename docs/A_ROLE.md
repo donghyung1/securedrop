@@ -9,6 +9,7 @@
 | 로그 보존 | ✅ | `/aws/lambda/securedrop-api`, `/apigw/securedrop-api` 모두 14일 |
 | 대시보드 | ✅ | `SecureDrop-Demo` 1개 |
 | 알람 | ✅ | `SecureDrop-LambdaErrors`, `SecureDrop-Api5XX` 2개, 상태 OK, action 없음 |
+| 알람 임계값 | ⚠️ PRD와 다름(유지) | 두 알람 모두 AWS/Lambda Errors·AWS/ApiGateway 5XXError, Sum, Period 60초, EvaluationPeriods 1, Threshold 1(>=), 결측 notBreaching, ActionsEnabled false. `configure_monitoring.py`와 배포값 동일. PRD 10.8(5분간 5건 이상)과 다르며, 팀 결정으로 그대로 둠(데모 트래픽이 적어 오류를 바로 보이게 하려는 것, 알림 action 없어 부작용 없음) |
 | 지표 상승 | ✅ | `BlockedCount`(PHONE·RRN/extension)가 10-19 15:35 확장 차단 시 각 2. 10-20 측정 전송 완료 후 `TransferCount`(web) +1 |
 | 관리자 콘솔 링크 | ✅ | 배포 `config.js`의 `cloudwatchUrl`이 대시보드 주소로 설정됨(`--frontend-only` 재배포, 무효화 완료) |
 
@@ -27,6 +28,7 @@
 
 - **Lambda 역할** `securedrop-lambda-v13`: S3 `transfers/*`의 Put/Get/DeleteObject, DynamoDB 5개 테이블과 GSI의 Get/Put/Update/Delete/Query, 자기 로그 그룹 쓰기만 허용. Scan·관리형 정책 없음. ✅
 - **Lambda**: python3.12, 1024MB, 25초, 예약 동시성 10, Function URL 없음, 호출 권한은 해당 REST API ARN으로 제한. 환경 변수에 비밀값 없음(`ALLOWED_ORIGINS`, `APP_ENV`, `FILES_BUCKET`, `PUBLIC_BASE_URL`). ✅
+- **CORS 허용 origin**: 배포 Lambda `ALLOWED_ORIGINS`에 웹 도메인·확장 origin 외 `http://localhost:*`, `127.0.0.1`도 포함된다. 로컬 개발·테스트용으로 **유지하기로 결정**(팀).
 - **API Gateway**: stage 20/40, 로그인 1/5, 공개 경로 5/10 rps, data trace 끔, 사용량 계획 0.5/5·일 2,000회. ✅
 - **API Gateway 로그 역할** `securedrop-apigateway-logs`: 로그 권한이 `Resource: *`. 계정 전체 API Gateway 로깅 역할의 일반적인 형태이므로 수용한다.
 - **태그** ✅: 2026-10-20 `infra/tag_resources.py --owner dh1 --execute`로 19개 리소스(S3 2, DynamoDB 5, Lambda, API Gateway 4, 로그 그룹 2, IAM 역할 2, 알람 2, CloudFront)에 `Project=securedrop`, `Owner=dh1`을 적용했다. 이전에 태그가 없던 CloudFront 배포와 API stage 포함, 기존 태그는 유지. 대시보드는 태그 미지원.
@@ -42,6 +44,26 @@
 | `sd_events` | ✅ | 185건 속성은 day, ts#uuid, event, source, types, request_id, time, ttl뿐. types는 유형 코드만 |
 | `sd_transfers` 파일명 | 허용 | `files[].name`만 존재(PRD 10.3 허용 범위). 서명 URL 없음 |
 | CloudWatch 로그 | ✅ | 14일치 Lambda 2,936건과 게이트웨이 637건을 전화·주민·카드·이메일·서명 URL·관리 토큰·Bearer·비밀번호·base64 패턴으로 검사. 걸린 것은 EMF 타임스탬프, UUID, 진단 단계명뿐인 오탐 |
+
+## 만료·TTL·테이블 (10.3, 10.4)
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| Presigned 업로드 POST·다운로드 GET | ✅ 모두 300초 | `config.py` 기본값, Lambda 환경 변수로 덮어쓰지 않음 |
+| 공유 링크 | ✅ 기본 600초 | 선택지 300/600/3600초만 허용, 최대 3600초 |
+| 검사 세션 | ✅ 600초 | 세션 TTL |
+| 과금 모드 | ✅ 5개 테이블 모두 PAY_PER_REQUEST | 온디맨드 |
+| DynamoDB TTL | ✅ 속성 `ttl`이 sd_admin_sessions, sd_transfers, sd_sessions, sd_events에서 ENABLED | sd_admins는 DISABLED(PRD상 TTL 없음) |
+| GSI | ✅ sd_transfers `day-created-index` | HASH `created_day`, RANGE `created_at`, 투영 ALL |
+
+## 업로드 경로·폐기 실측 (2026-10-20)
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| 20MiB 업로드가 Lambda를 거치지 않음 | ✅ | 01:32 UTC에 약 18MiB 더미 파일로 발급(200, 0.86초) → S3 POST(204, 3.0초, 업로드 호스트는 S3 버킷 도메인, SSE-S3·SHA-256 체크섬이 정책에 고정) → 완료(200, ACTIVE). 같은 구간 API Gateway·Lambda 로그에는 발급·완료·다운로드 조회·폐기 요청만 있고 업로드 본문 요청은 없음. Lambda 최대 메모리 약 140MB. 브라우저 네트워크 탭 대신 로그로 증명 |
+| 폐기 시 S3 객체 삭제 | ✅ | 폐기 전 head-object 성공·다운로드 206 → 폐기 API 200 REVOKED → 2초 후 head-object 404, `GET /api/d/{id}` 404. 테스트 전송 1건만 만들었고 폐기·삭제 완료 |
+
+- 위 업로드 구간의 4.3초는 참고값이다. 성능 공식 측정값 2.72초는 그대로 유지한다.
 
 ## 성능·크기 경계 (7장, 13장) — 2026-10-20 08:31 측정
 
@@ -68,7 +90,7 @@
 
 ## 비용·정리 대상 (Day 5)
 
-- 10/1~10/20 Cost Explorer 추정치에서 서버리스 관련 서비스 합계는 약 **$0.07**(API Gateway $0.002, CloudFront $0.006, S3 $0.020, CloudWatch $0.040, Route 53 $0.31 별도)이다. 계정 전체는 $186.27로 EC2 기타 $100.77, EC2 $44.15, ELB $13.05, VPC $11.92가 대부분이다. 공유 계정이고 비용 할당 태그 권한이 없어서 프로젝트별로 나눌 수 없다. 이 중 SecureDrop EC2(10/19 종료)가 차지하는 몫은 청구 콘솔 담당자에게 확인해야 한다. Lambda·DynamoDB는 $0이다.
+- 10/1~10/20 Cost Explorer 추정치(Estimated)에서 서버리스 관련 서비스 합계는 약 **$0.068**(기존 약 $0.07과 일치)이다. 서비스별로 API Gateway $0.0024, CloudFront $0.0056, S3 $0.0199, CloudWatch $0.0402, DynamoDB $0.0004, Secrets Manager $0.0001, Lambda $0이고, Route 53 $0.31은 별도다. 계정 전체는 $186.27(Cost Explorer 추정치, 계정 전체에 세금 $15.85 포함)로 EC2 기타 $100.77, EC2 $44.15, ELB $13.05, VPC $11.92가 대부분이다. 공유 계정이고 비용 할당 태그 권한이 없어서 프로젝트별로 나눌 수 없다. Project 태그 그룹핑은 전부 태그 없음(`Project$`)으로 묶여 분리 불가를 재확인했다. 이 중 SecureDrop EC2(10/19 종료)가 차지하는 몫은 청구 콘솔 담당자에게 확인해야 한다. 청구 확정액이 아니다.
 - 남은 SecureDrop EC2 자원: 인스턴스·EIP·볼륨·NAT·VPC 없음(태그 기준). 레거시 버킷 `securedrop-cloud-<acct>-ap-northeast-2`(Project=SecureDropCloud, 객체 2개, 2.4MB)와 IAM 역할·인스턴스 프로파일 `securedrop-cloud-backend`(SSM 관리형 정책 + 해당 버킷 전용 인라인 정책)는 2026-10-20 aws cli로 삭제했다(Lambda 환경변수 참조 없음, 프로파일 사용 인스턴스 없음 확인 후). EC2 시절 수동 정리 대상은 더 이상 없다.
 - 배포 버전: Lambda 최종 수정 2026-10-19 07:26 UTC, API 배포 `x122qq`, 웹 자산 2026-10-20 master 기준.
 - **유지**: 발표 종료까지 전체 유지. **발표 직후**: API Key 삭제. **발표 후**: `teardown.py` 전체 정리. CloudFront·도메인 유지 여부는 팀이 결정한다.
