@@ -4,7 +4,7 @@
 
 ## 1. 환경과 DynamoDB
 
-서울 리전의 개발자 AWS CLI profile을 사용하세요. `.env.example`을 복사하고 전송 버킷·CloudFront 주소·허용 origin을 지정합니다. Lambda에는 AWS 키·개발자 profile·플러그인 API Key를 넣지 않습니다.
+서울 리전의 개발자 AWS CLI profile을 사용하세요. 명령 예시는 `--profile lab` 기준이며, 로컬에 `lab` 프로필이 없으면 `default`로 바꿔 실행합니다(`aws configure list-profiles`로 확인). `.env.example`을 복사하고 전송 버킷·CloudFront 주소·허용 origin을 지정합니다. Lambda에는 AWS 키·개발자 profile·플러그인 API Key를 넣지 않습니다.
 
 ```powershell
 cd backend

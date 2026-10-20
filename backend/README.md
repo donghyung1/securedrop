@@ -4,6 +4,8 @@ FastAPI + Mangum 기반 Lambda 백엔드입니다. 파일은 S3, 검사·정제 
 
 ## 실행
 
+명령의 `--profile`은 `lab`을 기준으로 적었습니다. 로컬에 `lab` 프로필이 없으면 `default`로 바꿔 실행하세요(`aws configure list-profiles`로 확인).
+
 ```powershell
 cd backend
 uv sync --frozen
@@ -103,10 +105,10 @@ uv run pytest -q
 uv run python infra/package_lambda.py
 uv run python infra/deploy_serverless.py
 # CloudFront 상태가 Deployed가 된 후
-uv run python infra/configure_monitoring.py --profile default --api-id <serverless.json의 api_id>
+uv run python infra/configure_monitoring.py --profile lab --api-id <serverless.json의 api_id>
 # KMS 키(전송 버킷 SSE-KMS), WAF(API prod stage), CloudTrail. --deploy-code는 패키지된 Lambda 코드도 올립니다.
-uv run python infra/configure_security.py --profile default --deploy-code
-uv run python infra/verify_security.py --profile default
+uv run python infra/configure_security.py --profile lab --deploy-code
+uv run python infra/verify_security.py --profile lab
 uv run --with pillow --with zxing-cpp python infra/verify_serverless.py
 uv run --with playwright python -m playwright install chromium
 uv run --with playwright python infra/verify_browser.py
