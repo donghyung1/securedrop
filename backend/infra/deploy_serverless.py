@@ -19,6 +19,7 @@ from config import Settings
 from infra.admin_origin import configure_admin_origin
 from infra.cors import configure_gateway_responses, extension_origin, update_lambda_origins
 from infra.create_tables import create_tables
+from infra.extension_package import ZIP_KEY, build_extension_zip
 from store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -538,6 +539,16 @@ def deploy_frontend(s3, cf, account, files, web, distribution, api_base):
             CacheControl="no-cache",
             ServerSideEncryption="AES256",
         )
+    # Chrome extension ZIP (PRD 8.1): config.js points at this deployment
+    s3.put_object(
+        Bucket=web,
+        Key=ZIP_KEY,
+        Body=build_extension_zip(ROOT.parent / "extension", api_base, OLD["url"]),
+        ContentType="application/zip",
+        ContentDisposition='attachment; filename="securedrop-extension.zip"',
+        CacheControl="no-cache",
+        ServerSideEncryption="AES256",
+    )
     csp = f"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' {api_base.rsplit('/prod', 1)[0]} https://{files}.s3.{REGION}.amazonaws.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://{files}.s3.{REGION}.amazonaws.com"
     security = {
         "StrictTransportSecurity": {
