@@ -756,3 +756,14 @@ def test_every_admin_route_requires_session_by_default(env, admin):
             assert response.status_code in (401, 405), (method, path, response.status_code)
             wrong = client.request(method, concrete, headers={"Authorization": "Bearer nope"})
             assert wrong.status_code in (401, 405), (method, path, wrong.status_code)
+
+
+def test_thirteen_digit_numbers_are_not_cards():
+    # RRN(13자리)이 우연히 Luhn을 통과해 CARD로도 집계되던 중복·오탐을 막는다.
+    assert scan("850315-2201237")["findings"] == [{"type": "RRN", "count": 1}]
+    assert scan("900101-1234568")["findings"] == [{"type": "RRN", "count": 1}]
+    assert scan("901301-1234568")["findings"] == []  # 13월: RRN도 카드도 아님
+    # 14자리 이상 카드는 계속 탐지한다.
+    assert scan("30569309025904")["findings"] == [{"type": "CARD", "count": 1}]  # 14자리
+    assert scan("3782 822463 10005")["findings"] == [{"type": "CARD", "count": 1}]  # 15자리
+    assert scan("4242-4242-4242-4242")["findings"] == [{"type": "CARD", "count": 1}]  # 16자리
