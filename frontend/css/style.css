@@ -146,6 +146,9 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
 }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+.site-footer { max-width: 1080px; margin: 0 auto; padding: 0 16px 32px; }
+.site-footer a { color: var(--primary); }
+
 /* ---------- 토스트 ---------- */
 .toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
