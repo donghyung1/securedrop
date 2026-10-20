@@ -26,11 +26,11 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, Field
-
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
 from mcp.types import ToolAnnotations
+from pydantic import BaseModel, Field
 
 API_BASE = os.environ.get("SECUREDROP_API_BASE", "").rstrip("/")
 API_KEY = os.environ.get("SECUREDROP_API_KEY", "")
@@ -181,22 +181,33 @@ async def create_transfer(
         result = await call_api("/api/plugin/scan", json={"text": scan_input})
         if result["blocked"]:
             return [
-                f"전송하지 않았습니다. {name}에서 민감정보가 발견되었습니다: {summarize(result['findings'])}. "
-                "민감정보를 지운 뒤 다시 요청하거나, SecureDrop 웹에서 마스킹·삭제 정제 후 보내세요."
+                (
+                    f"전송하지 않았습니다. {name}에서 민감정보가 발견되었습니다: "
+                    f"{summarize(result['findings'])}. 민감정보를 지운 뒤 다시 요청하거나, "
+                    "SecureDrop 웹에서 마스킹·삭제 정제 후 보내세요."
+                )
             ]
 
     # 2) 사용자 확인
+    #    확인 창(elicitation)을 띄울 수 있으면 띄운다. 기능을 알리고도 실제로는 서버 요청을
+    #    받을 수 없는 클라이언트(예: VS Code 확장의 Claude Code)도 있어, 실패하면
+    #    이 도구 호출에 대한 클라이언트의 실행 승인을 사용자 승인으로 본다.
+    approval = "클라이언트의 도구 실행 승인"
     caps = ctx.client_capabilities
     if caps is not None and caps.elicitation is not None:
         size = f"{len(content)}B" if len(content) < 1024 else f"{len(content) / 1024:.1f}KB"
-        answer = await ctx.elicit(
-            f"'{name}'({size})을 {expires_minutes}분 동안 유효한 휴대폰 전송 링크로 만듭니다. "
-            "민감정보 검사는 통과했습니다. 전송할까요?",
-            TransferApproval,
-        )
-        if answer.action != "accept" or not answer.data.approve:
-            return ["사용자가 전송을 취소했습니다. 아무것도 보내지 않았습니다."]
-    # elicitation 미지원 클라이언트: 이 도구 호출 자체를 사용자가 승인한 것으로 본다 (클라이언트 승인 단계)
+        try:
+            answer = await ctx.elicit(
+                f"'{name}'({size})을 {expires_minutes}분 동안 유효한 휴대폰 전송 링크로 만듭니다. "
+                "민감정보 검사는 통과했습니다. 전송할까요?",
+                TransferApproval,
+            )
+        except MCPError:  # 확인 창 전달 실패(NoBackChannelError 등) → 실행 승인으로 대신
+            answer = None
+        if answer is not None:
+            if answer.action != "accept" or not answer.data.approve:
+                return ["사용자가 전송을 취소했습니다. 아무것도 보내지 않았습니다."]
+            approval = "확인 창 승인"
 
     # 3) 전송 (서버가 다시 검사하고, 민감정보면 409 SENSITIVE_DETECTED로 거절한다)
     expires_in = EXPIRES_SEC[expires_minutes]
@@ -218,6 +229,7 @@ async def create_transfer(
         f"휴대폰 전송 링크를 만들었습니다 ({name}).\n"
         f"링크: {body['share_url']}\n"
         f"만료: {body['expires_at']} ({expires_minutes}분)\n"
+        f"승인 방식: {approval}\n"
         "아래 QR 코드를 휴대폰으로 스캔하면 앱 설치 없이 받을 수 있습니다."
     )
     qr = body.get("qr", "")

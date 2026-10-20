@@ -9,7 +9,7 @@ PRD v1.3 F4. Claude가 SecureDrop을 "승인된 통로"로만 쓰도록 MCP 도�
 
 `create_transfer` 순서:
 1. 먼저 검사합니다. 민감정보가 있으면 **승인을 묻지 않고 전송하지 않으며**, 유형·개수만 설명합니다.
-2. 통과하면 사용자 확인 창(MCP elicitation)을 띄웁니다. 클라이언트가 elicitation을 지원하지 않으면 클라이언트의 도구 실행 승인 단계에 맡깁니다.
+2. 통과하면 사용자 확인 창(MCP elicitation)을 띄웁니다. 클라이언트가 확인 창을 지원하지 않거나 띄우지 못하면(예: **VS Code 확장의 Claude Code**는 서버가 먼저 보내는 요청을 받지 못함) 클라이언트의 **도구 실행 승인 창**을 사용자 승인으로 봅니다. 결과 메시지에 `승인 방식`이 표시됩니다.
 3. 승인되면 `user_approved=true`로 전송합니다. 서버가 다시 검사합니다(민감정보면 409 `SENSITIVE_DETECTED`).
 4. 링크·만료 시각·QR 이미지를 돌려줍니다. 관리 토큰은 AI에게 넘기지 않습니다.
 
@@ -40,6 +40,7 @@ claude mcp add \
 
 - 확인: `claude mcp list`, 세션 안에서 `/mcp`
 - `--scope project`(`.mcp.json`)는 저장소에 커밋되므로 API Key가 들어가는 이 서버에는 쓰지 마세요.
+- 시연할 때는 Claude Code를 기본 권한 모드로 두세요. 자동 승인 모드에서는 도구 실행 승인 창이 뜨지 않아 사람 승인 단계가 사라집니다.
 - `create_transfer`는 권한 허용 목록(`mcp__securedrop__*` 등)에 넣지 마세요. 매번 승인을 받아야 PRD의 "호출 전 사용자 승인"이 지켜집니다. `scan_text`만 허용하려면 `mcp__securedrop__scan_text`를 지정합니다.
 
 ## 시연 시나리오
