@@ -14,7 +14,8 @@ export const CONFIG = {
   API_BASE: String(window.SD_CONFIG?.apiBase || "http://localhost:8000").replace(/\/+$/, ""),
   USE_MOCK: (apiParam || savedMode || window.SD_CONFIG?.defaultApiMode || "mock") === "mock",
 
-  MAX_FILE_MB: 20,        // 전송 상한 (S3 Presigned POST content-length-range)
+  MAX_FILES: 5,           // 한 번에 보낼 수 있는 파일 수
+  MAX_FILE_MB: 20,        // 전송 합계 상한 (파일 합계, 서버 max_file_mb)
   SCAN_FILE_MAX_MB: 4,    // 검사·정제 상한 (Lambda 페이로드 한도)
   SCANNABLE_EXTS: ["txt", "csv"],
   // 업로드 허용 확장자 — v1.3에 목록이 없어 A의 v1.2 백엔드 목록을 유지. A와 확정 필요.

@@ -4,6 +4,8 @@
   - sanitize_delete_send:               삭제 조치 → 처리본 전송 → 수신 파일에서 값이 지워졌는지 확인
   - assist_mask_delete_cancel_clarify:  자연어 요청 4종이 화면과 연결되고, 사용자가 확정하기 전에는 /api/sanitize를 호출하지 않음
   - e2ee_ciphertext_and_decrypt:        (F12, B·C 공동) S3 객체가 암호문인지, #k= 키로 복호화되는지, 틀린 키는 저장되지 않는지
+  - multi_file_mixed_send:              (F10) .txt(안전) + .csv(정제) + .pdf(검사 미지원) 3개를 한 전송으로: 파일별 scan_id/sanitize_id, 수신 3개
+  - multi_file_limits_and_e2ee:         (F10) 6번째 파일 거부, .txt가 있으면 E2EE 비활성, .pdf 2개는 키 하나로 암호화·각각 복호화
   - revoked_link_and_mobile_layout:     폐기 후 수신 화면, 390px 폭 레이아웃, 스크립트 오류 없음
 
 실행:  python frontend/tests/verify_deployed.py --url https://<CloudFront 도메인>
@@ -59,6 +61,12 @@ def main():
             receiver.close()
             return name, body, done["share_url"]
 
+        def approve():
+            """처리본 미리보기 승인 → 전송 목록에 처리본으로 반영 (전송은 따로 "QR 코드 만들기")"""
+            expect(page.locator("#btn-send")).to_have_text("처리본 승인")
+            page.locator("#btn-send").click()
+            expect(page.locator("#btn-send")).to_have_text("QR 코드 만들기")
+
         def revoke_and_reset():
             page.locator("#btn-revoke").click()
             expect(page.locator("#qr-status")).to_contain_text("폐기됨", timeout=60000)
@@ -77,7 +85,7 @@ def main():
         preview = page.locator("#preview-text").inner_text()
         assert "900101-1******" in preview and "010-****-5678" in preview and "[REDACTED]" in preview
         assert len(preview.splitlines()) <= 20
-        expect(page.locator("#btn-send")).to_have_text("승인하고 QR 코드 만들기")
+        approve()
         name, body, _ = send_and_receive()
         assert name == "고객정보_정제본.csv", name
         assert all(v not in body for v in ("900101-1234568", "1234-5678", "@example.com")), body
@@ -90,6 +98,7 @@ def main():
         assert page.input_value("#act-AWS_ACCESS_KEY") == "DELETE"
         page.locator("#btn-sanitize").click()
         expect(page.locator("#recheck-status")).to_contain_text("남은 민감정보가 없습니다", timeout=60000)
+        approve()
         name, body, _ = send_and_receive()
         assert "AKIA" not in body and "AWS_ACCESS_KEY_ID=" in body, body
         revoke_and_reset()
@@ -117,8 +126,8 @@ def main():
         expect(page.locator("#guard-buttons button")).to_have_text(["전송 취소"])
         expect(page.locator("#file-info")).to_be_visible()
         assert not sanitize_calls, sanitize_calls
-        page.locator("#guard-buttons button", has_text="전송 취소").click()
-        expect(page.locator("#dropzone")).to_be_visible()
+        page.locator("#guard-buttons button", has_text="전송 취소").click()  # 파일이 하나뿐이라 전송 전체 취소
+        expect(page.locator("#file-info")).to_be_hidden()
         results["assist_mask_delete_cancel_clarify"] = "passed"
 
         # 4) 브라우저 암호화 (F12)
@@ -127,6 +136,7 @@ def main():
         expect(page.locator("#scan-status")).to_contain_text("발견되지 않았습니다", timeout=60000)
         expect(page.locator("#encrypt-check")).to_be_disabled()
         expect(page.locator("#encrypt-check")).not_to_be_checked()
+        page.locator("#btn-reset").click()  # 파일을 고르면 목록에 더해지므로, 비우고 .pdf만 고른다
         plain = b"%PDF-1.4\n" + b"e2ee-sample\n" * 20  # 검사 미지원 형식은 암호화 가능
         page.locator("#file-input").set_input_files(
             {"name": "암호화시험.pdf", "mimeType": "application/pdf", "buffer": plain}
@@ -163,7 +173,95 @@ def main():
         revoke_and_reset()
         results["e2ee_ciphertext_and_decrypt"] = "passed"
 
-        # 5) 폐기된 링크 + 모바일 폭
+        # 5) 다중 파일 (F10): 안전 .txt + 정제할 .csv + 검사 미지원 .pdf 를 한 전송으로
+        pdf_bytes = b"%PDF-1.4\n" + b"multi-file-sample\n" * 10
+        page.locator("#file-input").set_input_files([
+            str(SAMPLES / "회의록.txt"),
+            str(SAMPLES / "고객정보.csv"),
+            {"name": "문서.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes},
+        ])
+        expect(page.locator("#file-list .file-badge")).to_have_text(
+            ["안전", "민감정보 발견", "검사 미지원"], timeout=60000)
+        expect(page.locator("#btn-send")).to_be_disabled()  # 확인 전에는 보낼 수 없음
+        page.get_by_role("button", name="고객정보.csv 정제").click()
+        page.locator("#btn-sanitize").click()  # 기본 선택: 모든 유형 마스킹
+        expect(page.locator("#recheck-status")).to_contain_text("남은 민감정보가 없습니다", timeout=60000)
+        approve()
+        expect(page.locator("#file-list .file-badge")).to_have_text(["안전", "정제 완료", "검사 미지원"])
+        expect(page.locator("#btn-send")).to_be_disabled()  # 검사 미지원 파일 확인이 남음
+        page.locator("#confirm-check").check()
+        with page.expect_request(lambda r: r.url.endswith("/api/transfers") and r.method == "POST") as created:
+            with page.expect_response(lambda r: r.url.endswith("/complete") and r.request.method == "POST",
+                                      timeout=120000) as completion:
+                page.locator("#btn-send").click()
+        request_body = created.value.post_data_json
+        assert [f["name"] for f in request_body["files"]] == ["회의록.txt", "고객정보_정제본.csv", "문서.pdf"]
+        assert "scan_id" in request_body["files"][0] and "sanitize_id" in request_body["files"][1]
+        assert not any(k in request_body["files"][2] for k in ("scan_id", "sanitize_id"))
+        assert "scan_id" not in request_body and "sanitize_id" not in request_body  # 참조는 파일별
+        assert request_body["user_approved"] and request_body["acknowledge_unsupported"]
+        assert not request_body["acknowledge_risk"]
+        done = completion.value.json()
+        expect(page.locator("#qr-card")).to_be_visible(timeout=60000)
+        receiver = context.new_page()
+        receiver.goto(done["share_url"])
+        expect(receiver.locator("#dl-files button")).to_have_count(3, timeout=60000)
+        saved = {}
+        for index in range(3):
+            with receiver.expect_download(timeout=60000) as event:
+                receiver.locator("#dl-files button").nth(index).click()
+            saved[event.value.suggested_filename] = Path(event.value.path()).read_bytes()
+        receiver.close()
+        assert set(saved) == {"회의록.txt", "고객정보_정제본.csv", "문서.pdf"}, set(saved)
+        assert saved["문서.pdf"] == pdf_bytes
+        assert b"900101-1234568" not in saved["고객정보_정제본.csv"]
+        revoke_and_reset()
+        results["multi_file_mixed_send"] = "passed"
+
+        # 6) 다중 파일 한도·E2EE: 6개째 거부, .txt가 있으면 E2EE 꺼짐, .pdf 2개는 키 하나로 각각 복호화
+        extra = [{"name": f"한도{i}.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-1.4\n" + bytes([65 + i])}
+                 for i in range(6)]
+        page.locator("#file-input").set_input_files(extra)
+        expect(page.locator("#file-list .file-item")).to_have_count(5, timeout=60000)
+        expect(page.locator("#toast")).to_contain_text("최대 5개")
+        page.locator("#btn-reset").click()
+        page.locator("#file-input").set_input_files(str(SAMPLES / "회의록.txt"))
+        expect(page.locator("#encrypt-check")).to_be_disabled(timeout=60000)
+        page.get_by_role("button", name="회의록.txt 빼기").click()
+        expect(page.locator("#encrypt-check")).to_be_enabled()
+        pdfs = [b"%PDF-1.4\n" + b"first-file\n" * 20, b"%PDF-1.4\n" + b"second-file\n" * 30]
+        page.locator("#file-input").set_input_files([
+            {"name": "하나.pdf", "mimeType": "application/pdf", "buffer": pdfs[0]},
+            {"name": "둘.pdf", "mimeType": "application/pdf", "buffer": pdfs[1]},
+        ])
+        expect(page.locator("#file-list .file-badge")).to_have_text(["검사 미지원", "검사 미지원"], timeout=60000)
+        page.locator("#confirm-check").check()
+        page.locator("#encrypt-check").check()
+        with page.expect_response(lambda r: r.url.endswith("/complete") and r.request.method == "POST",
+                                  timeout=120000):
+            page.locator("#btn-send").click()
+        expect(page.locator("#qr-e2ee-note")).to_be_visible(timeout=60000)
+        context.grant_permissions(["clipboard-read", "clipboard-write"], origin=url)
+        page.locator("#btn-copy").click()
+        link = page.evaluate("navigator.clipboard.readText()")
+        assert re.search(r"/d\.html\?id=[0-9a-f]+#k=", link), link
+        receiver = context.new_page()
+        with receiver.expect_response(lambda r: "/api/d/" in r.url, timeout=60000) as meta:
+            receiver.goto(link)
+        signed = meta.value.json()["files"]
+        assert len(signed) == 2
+        for item, plain_bytes in zip(signed, pdfs):
+            cipher = context.request.get(item["url"]).body()
+            assert cipher != plain_bytes and len(cipher) == len(plain_bytes) + 28
+        for index, plain_bytes in enumerate(pdfs):
+            with receiver.expect_download(timeout=60000) as event:
+                receiver.locator("#dl-files button").nth(index).click()
+            assert Path(event.value.path()).read_bytes() == plain_bytes
+        receiver.close()
+        revoke_and_reset()
+        results["multi_file_limits_and_e2ee"] = "passed"
+
+        # 7) 폐기된 링크 + 모바일 폭
         page.locator("#file-input").set_input_files(str(SAMPLES / "회의록.txt"))
         expect(page.locator("#scan-status")).to_contain_text("발견되지 않았습니다", timeout=60000)
         with page.expect_response(lambda r: r.url.endswith("/complete"), timeout=120000) as completion:

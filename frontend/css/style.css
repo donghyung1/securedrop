@@ -74,8 +74,24 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
   transition: border-color 0.15s, background 0.15s;
 }
 .dropzone:hover, .dropzone.is-over { border-color: var(--primary); background: #f0f5ff; }
-.file-info { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.dropzone.is-compact { padding: 14px 16px; margin-top: 12px; }
 .file-name { font-weight: 600; word-break: break-all; }
+.file-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.file-item {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 8px; border-top: 1px solid var(--line); border-radius: 8px;
+}
+.file-item:first-child { border-top: 0; }
+.file-item.is-focus { background: #f0f5ff; }
+.file-item-main { flex: 1; min-width: 160px; }
+.file-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.file-badge {
+  font-size: 0.78rem; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  background: var(--bg); color: var(--muted);
+}
+.file-badge.is-ok { background: var(--ok-bg); color: var(--ok); }
+.file-badge.is-warn { background: var(--warn-bg); color: var(--warn); }
+.file-badge.is-danger { background: var(--danger-bg); color: var(--danger); }
 
 /* ---------- 검사 결과 ---------- */
 .status { padding: 12px 14px; border-radius: 8px; background: var(--bg); }
