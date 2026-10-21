@@ -21,6 +21,8 @@ dev = [
     "httpx>=0.28,<1",
     "httpx2>=2.14.0",
     "zxing-cpp>=2.3,<4",
+    "pillow>=10,<13",
+    "playwright>=1.45,<2",
 ]
 
 [tool.pytest.ini_options]

@@ -59,7 +59,7 @@ cd frontend && python3 -m http.server 5500
 - [x] 다중 파일(F10): 아래 "다중 파일 전송"
 - [ ] 선택: 내 전송 목록(F11)
 
-배포 환경 검증: `python tests/verify_deployed.py --url https://<웹 주소>` (Playwright 필요, 결과·근거는 `docs/C_ROLE.md`)
+배포 환경 검증: `backend/`에서 `uv sync` 후 `uv run python -m playwright install chromium`(최초 1회), 이어서 `uv run python ../frontend/tests/verify_deployed.py --url https://<웹 주소>` (Playwright는 backend 개발 의존성 그룹에 포함, 결과·근거는 `docs/C_ROLE.md`)
 
 ## 다중 파일 전송 (F10)
 
