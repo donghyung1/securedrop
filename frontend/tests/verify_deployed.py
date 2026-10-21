@@ -8,7 +8,11 @@
   - multi_file_limits_and_e2ee:         (F10) 6번째 파일 거부, .txt가 있으면 E2EE 비활성, .pdf 2개는 키 하나로 암호화·각각 복호화
   - revoked_link_and_mobile_layout:     폐기 후 수신 화면, 390px 폭 레이아웃, 스크립트 오류 없음
 
-실행:  python frontend/tests/verify_deployed.py --url https://<CloudFront 도메인>
+실행(backend 개발 의존성 그룹에 playwright 포함, 어느 cwd에서든 동작):
+  cd backend
+  uv sync
+  uv run python -m playwright install chromium   # 최초 1회
+  uv run python ../frontend/tests/verify_deployed.py --url https://<CloudFront 도메인>
 실제 S3에 작은 파일을 올리며, 각 시나리오가 끝나면 링크를 폐기해 객체를 지운다.
 """
 
@@ -175,9 +179,10 @@ def main():
 
         # 5) 다중 파일 (F10): 안전 .txt + 정제할 .csv + 검사 미지원 .pdf 를 한 전송으로
         pdf_bytes = b"%PDF-1.4\n" + b"multi-file-sample\n" * 10
+        # Playwright는 경로와 버퍼를 한 목록에 섞지 못하므로 전부 버퍼로 넘긴다
         page.locator("#file-input").set_input_files([
-            str(SAMPLES / "회의록.txt"),
-            str(SAMPLES / "고객정보.csv"),
+            {"name": "회의록.txt", "mimeType": "text/plain", "buffer": (SAMPLES / "회의록.txt").read_bytes()},
+            {"name": "고객정보.csv", "mimeType": "text/csv", "buffer": (SAMPLES / "고객정보.csv").read_bytes()},
             {"name": "문서.pdf", "mimeType": "application/pdf", "buffer": pdf_bytes},
         ])
         expect(page.locator("#file-list .file-badge")).to_have_text(

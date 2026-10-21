@@ -109,9 +109,10 @@ uv run python infra/configure_monitoring.py --profile lab --api-id <serverless.j
 # KMS 키(전송 버킷 SSE-KMS), WAF(API prod stage), CloudTrail. --deploy-code는 패키지된 Lambda 코드도 올립니다.
 uv run python infra/configure_security.py --profile lab --deploy-code
 uv run python infra/verify_security.py --profile lab
-uv run --with pillow --with zxing-cpp python infra/verify_serverless.py
-uv run --with playwright python -m playwright install chromium
-uv run --with playwright python infra/verify_browser.py
+uv sync   # 개발 그룹(pillow, zxing-cpp, httpx, playwright 포함) 설치
+uv run python infra/verify_serverless.py
+uv run python -m playwright install chromium
+uv run python infra/verify_browser.py
 ```
 
 배포 상태와 검증 결과는 git에서 제외된 `deploy/aws/serverless.json`, `serverless-verification.json`, `browser-verification.json`에 저장합니다. 기존 CloudFront 설정은 `cloudfront-before-serverless.json`으로 보관합니다. 스크립트는 기존 EC2를 자동 종료하지 않습니다. 검증 완료 후 해당 instance ID를 확인해 종료하고 연결된 Elastic IP를 해제하세요.
