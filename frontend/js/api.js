@@ -3,6 +3,7 @@
 // - 관리 토큰이 필요한 호출은 manage.js의 토큰을 X-Manage-Token으로 보낸다.
 // - CONFIG.USE_MOCK 이면 서버·S3 없이 mock으로 동작한다 (서버 검증 순서·해시 비교까지 흉내).
 import { CONFIG } from "./settings.js";
+import { extOf } from "./transfer.js";
 
 export { CONFIG };
 
@@ -52,8 +53,6 @@ export class ApiError extends Error {
 
 // ---------------------------------------------------------------- 공통 도우미
 
-export const extOf = (name) => (name.split(".").pop() || "").toLowerCase();
-export const mimeOf = (file) => file.type || "application/octet-stream";
 
 export async function sha256Hex(blob) {
   // Web Crypto(subtle)는 보안 컨텍스트(HTTPS·localhost)에서만 제공된다. IP 주소 http 접속 등에서는 없다.
@@ -193,12 +192,12 @@ function mockDetect(text) {
   return { blocked: findings.length > 0, findings };
 }
 
-function utf8ToBase64(text) {
-  const bytes = new TextEncoder().encode(text);
+function bytesToBase64(bytes) {
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
+const utf8ToBase64 = (text) => bytesToBase64(new TextEncoder().encode(text));
 
 function mockQr(url) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">
@@ -220,10 +219,11 @@ function mockSave(all) {
 const mockSessions = new Map(); // session_id → { kind, sha256, findings, clean, expires }
 const mockS3 = new Map();       // key → { size, sha256, dataUrl }
 
-function mockSession(id) {
+function mockSession(id, kind) {
   const s = mockSessions.get(id);
   if (!s) throw new ApiError("EXPIRED", "검사 결과가 만료되었습니다. 파일을 다시 선택하세요.", 410);
   if (s.expires < Date.now()) throw new ApiError("EXPIRED", "검사 결과가 만료되었습니다. 파일을 다시 선택하세요.", 410);
+  if (s.kind !== kind) throw new ApiError("VALIDATION_ERROR", "검사·정제 참조가 올바르지 않습니다.", 422);
   return s;
 }
 
@@ -335,44 +335,56 @@ const mockApi = {
   },
 
   // A의 v1.3 백엔드 검증 순서를 따른다:
-  // 개수·크기 → 확장자 → .txt/.csv는 검사·정제 참조 필수 / 그 외는 acknowledge_unsupported
+  // 파일 수(1~5)·합계 크기 → 파일마다: 확장자 → .txt/.csv는 검사·정제 참조 필수 / 그 외는 acknowledge_unsupported
   // → 처리본은 user_approved → 민감정보 남으면 acknowledge_risk (409) → 요청 해시 = 세션 해시 (409)
+  // 참조는 파일마다 하나(files[i].scan_id | sanitize_id). payload 단위 참조는 파일이 하나일 때만 허용
   async createTransfer(body) {
     await delay(300);
     const { files, scan_id, sanitize_id, expires_in, acknowledge_risk, acknowledge_unsupported, user_approved, encrypted } = body;
     if (![300, 600, 3600].includes(expires_in)) {
       throw new ApiError("VALIDATION_ERROR", "만료 시간은 300, 600, 3600초 중 선택하세요.", 422);
     }
-    if (!Array.isArray(files) || files.length !== 1) throw new ApiError("VALIDATION_ERROR", "파일을 하나 선택하세요.", 422);
-    const f = files[0];
-    if (f.size > CONFIG.MAX_FILE_MB * MB) throw new ApiError("FILE_TOO_LARGE", "전송 파일은 합계 20MiB 이하여야 합니다.", 413);
-    if (!CONFIG.ALLOWED_EXTS.includes(extOf(f.name))) throw new ApiError("VALIDATION_ERROR", "허용되지 않는 파일 형식입니다.", 422);
-
-    const ref = sanitize_id || scan_id;
-    const s = ref ? mockSession(ref) : null;
-    if (CONFIG.SCANNABLE_EXTS.includes(extOf(f.name))) {
-      if (encrypted) throw new ApiError("VALIDATION_ERROR", "검사 대상 형식(.txt, .csv)은 종단간 암호화를 사용할 수 없습니다.", 422);
-      if (!s) throw new ApiError("VALIDATION_ERROR", "검사 또는 정제 참조가 필요합니다.", 422);
-    } else if (!acknowledge_unsupported) {
-      throw new ApiError("VALIDATION_ERROR", "검사 미지원 형식에 대한 확인이 필요합니다.", 422);
+    if (!Array.isArray(files) || files.length < 1 || files.length > CONFIG.MAX_FILES) {
+      throw new ApiError("VALIDATION_ERROR", `파일은 1~${CONFIG.MAX_FILES}개까지 보낼 수 있습니다.`, 422);
     }
-    if (sanitize_id && !user_approved) throw new ApiError("VALIDATION_ERROR", "처리본 미리보기 승인이 필요합니다.", 422);
-    if (s && !s.clean && !acknowledge_risk) {
-      throw new ApiError("SENSITIVE_REMAINS", "민감정보 정제 또는 위험 확인이 필요합니다.", 409);
+    const refs = (item) => [item.scan_id, item.sanitize_id, scan_id, sanitize_id].filter(Boolean).length;
+    if ((scan_id && sanitize_id) || (files.length !== 1 && (scan_id || sanitize_id)) || files.some((item) => refs(item) > 1)) {
+      throw new ApiError("VALIDATION_ERROR", "요청 형식이나 입력값을 확인하세요.", 422);
     }
-    if (s && s.sha256 !== f.sha256) {
-      throw new ApiError("INTEGRITY_MISMATCH", "검사·정제 결과 해시가 일치하지 않습니다.", 409);
+    if (files.reduce((n, item) => n + item.size, 0) > CONFIG.MAX_FILE_MB * MB) {
+      throw new ApiError("FILE_TOO_LARGE", "전송 파일은 합계 20MiB 이하여야 합니다.", 413);
     }
 
     const id = rid();
+    const items = files.map((f, i) => {
+      if (!CONFIG.ALLOWED_EXTS.includes(extOf(f.name))) throw new ApiError("VALIDATION_ERROR", "허용되지 않는 파일 형식입니다.", 422);
+      const scanId = f.scan_id || scan_id;
+      const sanId = f.sanitize_id || sanitize_id;
+      const ref = sanId || scanId;
+      const s = ref ? mockSession(ref, sanId ? "SANITIZE" : "SCAN") : null;
+      if (CONFIG.SCANNABLE_EXTS.includes(extOf(f.name))) {
+        if (encrypted) throw new ApiError("VALIDATION_ERROR", "검사 대상 형식(.txt, .csv)은 종단간 암호화를 사용할 수 없습니다.", 422);
+        if (!s) throw new ApiError("VALIDATION_ERROR", "검사 또는 정제 참조가 필요합니다.", 422);
+      } else if (!acknowledge_unsupported) {
+        throw new ApiError("VALIDATION_ERROR", "검사 미지원 형식에 대한 확인이 필요합니다.", 422);
+      }
+      if (sanId && !user_approved) throw new ApiError("VALIDATION_ERROR", "처리본 미리보기 승인이 필요합니다.", 422);
+      if (s && !s.clean && !acknowledge_risk) {
+        throw new ApiError("SENSITIVE_REMAINS", "민감정보 정제 또는 위험 확인이 필요합니다.", 409);
+      }
+      if (s && s.sha256 !== f.sha256.toLowerCase()) {
+        throw new ApiError("INTEGRITY_MISMATCH", "검사·정제 결과 해시가 일치하지 않습니다.", 409);
+      }
+      return { name: f.name, size: f.size, type: f.type, sha256: f.sha256.toLowerCase(), s3_key: `transfers/${id}/${i}` };
+    });
+
     const token = rid() + rid();
-    const key = `transfers/${id}/0`;
     const all = mockLoad();
     all[id] = {
       id,
       manage_hash: await sha256Hex(new Blob([token])),
       status: "PENDING_UPLOAD",
-      files: [{ name: f.name, size: f.size, sha256: f.sha256, s3_key: key }],
+      files: items.map(({ type, ...rest }) => rest),
       encrypted: !!encrypted,
       expires_at: new Date(Date.now() + expires_in * 1000).toISOString(), // 생성 시점부터 계산
       upload_expires_at: Date.now() + 120e3,
@@ -383,7 +395,7 @@ const mockApi = {
       id,
       manage_token: token,
       status: "PENDING_UPLOAD",
-      uploads: [{ url: "mock://s3", fields: { key, "Content-Type": f.type } }],
+      uploads: items.map((f) => ({ url: "mock://s3", fields: { key: f.s3_key, "Content-Type": f.type } })),
       upload_expires_in: 120,
       expires_at: all[id].expires_at,
     };
@@ -397,11 +409,7 @@ const mockApi = {
     }
     let dataUrl = null;
     if (blob.size <= MB) {
-      dataUrl = await new Promise((r) => {
-        const fr = new FileReader();
-        fr.onload = () => r(fr.result);
-        fr.readAsDataURL(blob);
-      });
+      dataUrl = `data:${blob.type || "application/octet-stream"};base64,${bytesToBase64(new Uint8Array(await blob.arrayBuffer()))}`;
     }
     mockS3.set(upload.fields.key, { size: blob.size, sha256: await sha256Hex(blob), dataUrl });
   },
@@ -414,24 +422,25 @@ const mockApi = {
     await mockCheckToken(t, token);
     if (t.status === "REVOKED") throw new ApiError("NOT_FOUND", null, 404);
     if (Date.parse(t.expires_at) <= Date.now()) throw new ApiError("EXPIRED", "만료된 전송입니다.", 410);
-    const f = t.files[0];
     const shareUrl = new URL(`d.html?id=${id}`, location.href).href;
     if (t.status === "ACTIVE") {
       // 재시도: 같은 링크를 돌려준다
       return { id, status: "ACTIVE", share_url: shareUrl, qr: mockQr(shareUrl), expires_at: t.expires_at };
     }
     if (t.upload_expires_at <= Date.now()) throw new ApiError("EXPIRED", "업로드 유효 시간이 지났습니다.", 410);
-    const obj = mockS3.get(f.s3_key);
-    if (!obj || obj.size !== f.size) throw new ApiError("UPLOAD_INCOMPLETE", null, 409);
-    if (obj.sha256 !== f.sha256) {
-      // 서버는 해시 불일치 시 전송을 폐기하고 객체를 지운다
-      mockS3.delete(f.s3_key);
-      t.status = "REVOKED";
-      mockSave(all);
-      throw new ApiError("INTEGRITY_MISMATCH", null, 409);
+    // 파일을 순서대로 확인한다. 하나라도 해시가 다르면 서버처럼 전송 전체를 폐기하고 객체를 모두 지운다
+    for (const f of t.files) {
+      const obj = mockS3.get(f.s3_key);
+      if (!obj || obj.size !== f.size) throw new ApiError("UPLOAD_INCOMPLETE", null, 409);
+      if (obj.sha256 !== f.sha256) {
+        t.files.forEach((x) => mockS3.delete(x.s3_key));
+        t.status = "REVOKED";
+        mockSave(all);
+        throw new ApiError("INTEGRITY_MISMATCH", null, 409);
+      }
     }
     t.status = "ACTIVE";
-    f.dataUrl = obj.dataUrl;
+    for (const f of t.files) f.dataUrl = mockS3.get(f.s3_key).dataUrl;
     mockSave(all);
     return { id, status: "ACTIVE", share_url: shareUrl, qr: mockQr(shareUrl), expires_at: t.expires_at };
   },
@@ -453,8 +462,10 @@ const mockApi = {
     await mockCheckToken(t, token);
     // 서버처럼 이미 폐기된 전송도 재시도 허용
     t.status = "REVOKED";
-    delete t.files[0].dataUrl;
-    mockS3.delete(t.files[0].s3_key);
+    for (const f of t.files) {
+      delete f.dataUrl;
+      mockS3.delete(f.s3_key);
+    }
     mockSave(all);
     return { id, status: "REVOKED" };
   },

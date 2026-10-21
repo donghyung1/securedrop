@@ -153,10 +153,24 @@ export function showSanitized(actions, res) {
   }
 }
 
-export function showSent(filename) {
+// 처리본 승인: 이 파일은 전송 목록에서 처리본으로 바뀐다 (실제 전송은 "QR 코드 만들기")
+export function showApproved(filename, res) {
   setContext(null);
   clear();
-  say(`${filename} 전송 링크를 만들었습니다. 휴대폰으로 QR 코드를 스캔하세요. 필요 없어지면 바로 폐기할 수 있습니다.`, "ok");
+  say(
+    res.clean
+      ? `${filename} 처리본을 전송 목록에 반영했습니다.`
+      : `${filename} 처리본을 남은 민감정보에 대한 확인과 함께 전송 목록에 반영했습니다.`,
+    res.clean ? "ok" : "warn",
+  );
+  setButtons([]);
+}
+
+// label: 파일명 또는 "파일 3개"
+export function showSent(label) {
+  setContext(null);
+  clear();
+  say(`${label} 전송 링크를 만들었습니다. 휴대폰으로 QR 코드를 스캔하세요. 필요 없어지면 바로 폐기할 수 있습니다.`, "ok");
   setButtons([]);
 }
 
@@ -164,7 +178,7 @@ export function showRejected(filename, reason) {
   setContext(null);
   clear();
   say(`${filename}: ${reason}`, "danger");
-  setButtons([{ label: "다른 파일 선택", action: "CANCEL" }]);
+  setButtons([{ label: "목록에서 빼기", action: "CANCEL" }]);
 }
 
 export function showUnscannable(filename, reason) {
