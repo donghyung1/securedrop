@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     default_expires_sec: int = 600
     max_expires_sec: int = Field(default=3600, ge=300, le=3600)
     session_ttl_sec: int = Field(default=600, ge=1, le=600)
-    upload_url_ttl_sec: int = Field(default=300, ge=1, le=300)
+    upload_url_ttl_sec: int = Field(default=120, ge=1, le=300)
     download_url_ttl_sec: int = Field(default=300, ge=1, le=300)
     admin_session_ttl_sec: int = Field(default=28800, ge=1, le=28800)
     admin_login_max_fails: int = Field(default=5, ge=1, le=5)

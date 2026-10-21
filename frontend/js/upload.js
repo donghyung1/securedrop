@@ -440,7 +440,7 @@ export async function sendBlob({ blob, name, type, ref, expectedSha256, acknowle
       errBox.textContent = "검사 결과가 만료되어 다시 검사했습니다. 다시 전송하세요.";
       runScan(state.file);
     } else if (err.code === "EXPIRED" && stage === "complete") {
-      errBox.textContent = "업로드 유효 시간(5분)이 지났습니다. 다시 전송하세요.";
+      errBox.textContent = "업로드 유효 시간(2분)이 지났습니다. 다시 전송하세요.";
     }
   } finally {
     sending = false;

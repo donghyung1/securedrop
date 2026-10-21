@@ -101,7 +101,7 @@ PRD는 AWS 핵심 서비스 6개(S3, Lambda, API Gateway, DynamoDB, CloudFront, 
 | 10.11 API Gateway 내보내기 커밋                   | `apigw-export.json` (API Key 값 없음)                                         |
 | 10.13·Day 5 비용 실제 수치, 정리 스크립트         | 서버리스 실측 약 $0.07(WAF·KMS·CloudTrail 제외, 비용 절 참고), `teardown.py` 계획 실행(보안 강화 후 재실행: 20개 대상, 건너뛰는 항목 1개) |
 | 10.13 API Key는 발표 직후 삭제                    | `--api-key-only` 준비                                                         |
-| 10.4·만료 Presigned 5분, 공유 링크 최대 60분      | 업로드·다운로드 Presigned 300초, 공유 링크 기본 600초·최대 3600초 ✅          |
+| 10.4·만료 Presigned 5분, 공유 링크 최대 60분      | 업로드 Presigned 120초·다운로드 Presigned 300초, 공유 링크 기본 600초·최대 3600초 ✅          |
 | 10.3 DynamoDB TTL·GSI                             | 5개 테이블 온디맨드, TTL `ttl` 4개 활성(sd_admins는 TTL 없음), `day-created-index` GSI 확인 ✅ |
 | 20MB 업로드가 Lambda 미경유                       | 로그로 확인: 발급·완료·조회·폐기 요청만 있고 업로드 본문 요청 없음 ✅          |
 | 폐기 시 S3 객체 삭제                              | 폐기 후 head-object 404, 다운로드 링크 404 ✅                                 |

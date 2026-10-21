@@ -85,7 +85,7 @@
 | 최소 권한 (Lambda 역할) | `Lambda 실행 역할: transfers/* Put/Get/Delete · 테이블 5개 · 자기 로그만` |
 | 암호화 | `파일 버킷 SSE-KMS (고객 관리형 키, 자동 교체) · 웹 버킷 SSE-S3 · S3는 TLS 아니면 거부` |
 | API 보호 (신규) | `WAF 웹 ACL: 관리형 규칙 3종 + IP당 5분 3,000건 제한 · CloudTrail 감사 기록(관리 이벤트 + 파일 버킷 데이터 이벤트)` |
-| 링크·보존 | `공유 링크 최대 60분 · 서명 URL 5분 · 객체는 1일 내 자동 삭제` |
+| 링크·보존 | `공유 링크 최대 60분 · 업로드 서명 2분·다운로드 서명 5분 · 객체는 1일 내 자동 삭제` |
 | 무결성 (신규) | `업로드 정책에 크기·SHA-256 고정, 완료 시 재검증` |
 | 인증 (신규) | `관리자 scrypt · 5회 실패 시 15분 잠금 · 토큰은 SHA-256 해시만 저장` |
 | 로그 | `로그 14일 보존` |
@@ -96,7 +96,7 @@
 - SSE-KMS: 업로드 정책에 `aws:kms`와 키 ID 고정 `backend/storage.py:40-55`, 플러그인 `put_object` `storage.py:103-117`, 설정 `KMS_KEY_ID` `backend/config.py:17`(비면 SSE-S3, 로컬 개발용). 웹 버킷은 SSE-S3 유지(`DS:142-147`). 키 정책: Lambda 역할은 `kms:GenerateDataKey`·`kms:Decrypt`만, `kms:ViaService`·암호화 컨텍스트 제한, IAM 쪽 KMS 권한 없음. 적용: `backend/infra/configure_security.py`, 점검: `backend/infra/verify_security.py`, 테스트: `backend/tests/test_security.py`
 - WAF·KMS·CloudTrail은 PRD 비목표(`PRD:80, 89`)였으나 PRD 범위를 넘어 추가 적용함. WAF `securedrop-api-acl`(REGIONAL, API Gateway `prod` 스테이지): CommonRuleSet·KnownBadInputsRuleSet·AmazonIpReputationList·IP 속도 제한 3,000건/5분(차단). 4MiB 민감 내용 파일을 받으려고 CommonRuleSet의 본문 규칙 5개(`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`, `EC2MetaDataSSRF_BODY`)는 Count. CloudTrail `securedrop-trail`: 다중 리전, 무결성 검증, 관리 이벤트 + `transfers/` 데이터 이벤트, 전용 로그 버킷 90일 만료
 - TLS Deny: 파일 버킷 `DS:176-192`, 웹 버킷 `DS:493-499`
-- Presigned 업로드·다운로드 300초: `backend/config.py:27-28`. 링크 만료 300/600/3600초: `backend/main.py:270-274`
+- Presigned 업로드 120초·다운로드 300초: `backend/config.py:27-28`. 링크 만료 300/600/3600초: `backend/main.py:270-274`
 - 수명 주기 1일 + 미완료 멀티파트 1일: `DS:148-161`. 만료 후 앱이 410 반환: `backend/main.py:561-566`. 링크 만료와 객체 삭제 시점이 다름(S3에 일정 시간 남음)
 - 무결성: `content-length-range`, SHA-256 체크섬 고정 `backend/storage.py:36-58`, 완료 시 재계산 `storage.py:60-86`, 불일치 시 폐기 `backend/main.py:526-532`
 - 관리자 인증: scrypt N=2^17 `backend/auth.py:20-36`, 5회·15분 `backend/config.py:30-31`, 로그인 스로틀 1/5 `DS:434-435`

@@ -375,7 +375,7 @@ const mockApi = {
       files: [{ name: f.name, size: f.size, sha256: f.sha256, s3_key: key }],
       encrypted: !!encrypted,
       expires_at: new Date(Date.now() + expires_in * 1000).toISOString(), // 생성 시점부터 계산
-      upload_expires_at: Date.now() + 300e3,
+      upload_expires_at: Date.now() + 120e3,
       download_count: 0,
     };
     mockSave(all);
@@ -384,7 +384,7 @@ const mockApi = {
       manage_token: token,
       status: "PENDING_UPLOAD",
       uploads: [{ url: "mock://s3", fields: { key, "Content-Type": f.type } }],
-      upload_expires_in: 300,
+      upload_expires_in: 120,
       expires_at: all[id].expires_at,
     };
   },
