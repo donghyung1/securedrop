@@ -20,7 +20,7 @@
 
 1. **확장 → v1.3 계약**: `/api/logs` → `/api/ext/logs`. 기존 확장은 본문에 `source`를 같이 보냈는데 v1.3 서버는 알 수 없는 필드를 422로 거부하므로 **차단 로그가 전부 실패했을 것**이다. `source`와 `X-Source` 헤더를 제거했다.
 2. **주소 분리**: API Gateway 주소(`apiBase`, `/prod` 포함)와 CloudFront 주소(`webBase`, "안전하게 전송하기" 링크)를 `extension/config.js` 한 곳에서 바꾸고, 팝업에서도 덮어쓸 수 있다. `manifest.json`에 `https://*.execute-api.ap-northeast-2.amazonaws.com/*` 권한 추가, 버전 1.3.0.
-3. **관리자 콘솔**: `backend/frontend/admin.html·js·css`. 로그인(세션은 `sessionStorage`, 쿠키 없음) → 현황 집계 / 최근 이벤트 / 활성 전송 / 강제 폐기. 모든 값을 `textContent`로만 그리고 인라인 스크립트가 없어 CSP(`script-src 'self'`)와 호환된다. 파일명·링크는 표시하지 않는다.
+3. **관리자 콘솔**: `backend/frontend/admin.html·js·css`. 로그인(세션은 `sessionStorage`, 쿠키 없음) → 현황 집계 / 최근 이벤트 / 활성 전송 / 강제 폐기. 모든 값을 `textContent`로만 그리고 인라인 스크립트가 없어 CSP(`script-src 'self'`)와 호환된다. 파일명은 표시하지만 파일 내용·링크는 표시하지 않는다.
 4. **테스트 보강**: 확장 로그 계약(엄격 스키마, 유형만 저장), 모든 `/api/admin/*`가 세션 없이 401인지 확인. `tests/test_cases.md`에 인증(4장)·확장 시연(5장) 표 추가.
 
 ## 확인 못 한 것 (정직하게)
@@ -59,7 +59,7 @@ AWS 자격 증명 없이 공개 주소로 확인할 수 있는 항목만 점검�
 - [x] 오탐·미탐 표(`tests/test_cases.md` 1~3장)의 "실제 결과" 열을 배포 환경에서 다시 채움 — 재배포 후 30건 불일치 0건 (2026-10-20)
 
 ### 관리자 콘솔 시연 점검 (배포 환경, 2026-10-19, 본인 확인)
-- [x] 로그인 → 현황 집계·최근 이벤트 표시, 파일명·링크 미표시
+- [x] 로그인 → 현황 집계·최근 이벤트 표시, 파일명 표시, 링크 미표시
 - [x] 확장 차단 이벤트(`BLOCK / RRN / extension`) 콘솔에 반영
 - [x] 활성 전송 표에 ACTIVE 전송 표시(ID 앞 8자, 크기, 생성·만료, 다운로드 수) → "강제 폐기" 동작
 - [x] 로그아웃 후 새로고침 시 로그인 화면으로 복귀

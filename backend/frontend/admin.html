@@ -31,7 +31,7 @@
     </section>
 
     <div id="console-view" hidden>
-      <p class="notice">파일명·내용·다운로드 링크는 표시되지 않습니다. 시각은 UTC 기준입니다.</p>
+      <p class="notice">파일 내용·다운로드 링크는 표시되지 않습니다(파일명은 표시). 시각은 UTC 기준입니다.</p>
 
       <section>
         <div class="bar">
@@ -58,7 +58,7 @@
           <label for="status" class="inline">상태</label>
           <select id="status"><option value="ACTIVE">ACTIVE</option><option value="PENDING_UPLOAD">PENDING_UPLOAD</option><option value="REVOKED">REVOKED</option></select>
         </div>
-        <table><thead><tr><th>ID</th><th>크기</th><th>생성</th><th>만료</th><th>다운로드</th><th>상태</th><th>암호화</th><th></th></tr></thead><tbody id="transfers"></tbody></table>
+        <table><thead><tr><th>ID</th><th>파일명</th><th>크기</th><th>생성</th><th>만료</th><th>다운로드</th><th>상태</th><th>암호화</th><th></th></tr></thead><tbody id="transfers"></tbody></table>
       </section>
 
       <p><a id="cw-link" href="#" target="_blank" rel="noopener noreferrer" hidden>CloudWatch 대시보드 (AWS 콘솔 로그인 필요)</a></p>

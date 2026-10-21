@@ -130,6 +130,7 @@
         }
         tr.append(
           el("td", row.display_id),
+          el("td", (row.names || []).join(", ")),
           el("td", size(row.size)),
           el("td", time(row.created_at)),
           el("td", time(row.expires_at)),
@@ -143,7 +144,7 @@
     );
     if (!items.length) {
       const tr = el("tr");
-      tr.append(Object.assign(el("td", "전송 없음", "muted"), { colSpan: 8 }));
+      tr.append(Object.assign(el("td", "전송 없음", "muted"), { colSpan: 9 }));
       fill($("transfers"), [tr]);
     }
   }

@@ -133,7 +133,7 @@ F-05, D-06처럼 **유효한 RRN이 Luhn까지 통과하면 CARD가 추가로 �
 | A-04 | 없는 아이디 vs 틀린 비밀번호 | 같은 401 문구 | `test_admin_failures_and_lock` | ✅ 2026-10-20 (두 응답 동일, 운영 계정 존재 여부는 미확인) |
 | A-05 | 5회 실패 | 15분 잠금 423 ACCOUNT_LOCKED | 위와 동일 | ☐ (운영 계정이 잠기므로 테스트 계정으로만) |
 | A-06 | 로그아웃 후 이전 토큰 | 401 | `test_admin_routes_privacy_stats_and_logout` | ✅ 2026-10-19 (로그아웃 후 로그인 화면 복귀) |
-| A-07 | 관리자 응답에 파일명·링크·토큰 포함 여부 | 없음 | 위와 동일 | ✅ 2026-10-19 (admin.html 화면 확인) |
+| A-07 | 관리자 응답에 파일명·링크·토큰 포함 여부 | 파일명만 포함, 링크·토큰 없음 | 위와 동일 | ✅ 2026-10-19 (admin.html 화면 확인) |
 | A-08 | 세션 없이 `/api/admin/*` | 401 (새 관리자 API도 기본 보호) | `test_every_admin_route_requires_session_by_default` | ✅ 2026-10-19 (무토큰·가짜 토큰 401) |
 | A-09 | 만료된 관리자 세션(TTL 삭제 전) | 401 | `test_admin_expiry_checked_without_ttl_delete` | ☐ |
 | A-10 | `sd_admin_sessions`·`sd_transfers`에 토큰 원문 | 없음(SHA-256 해시만) | 위 테스트 일부 | ✅ 2026-10-20 (A 확인: `manage_hash`는 hex64. 관리자 세션은 점검 시 0건이라 코드·테스트로 확인) |

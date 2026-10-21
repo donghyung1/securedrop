@@ -34,12 +34,12 @@ Lambda는 Python 3.12 x86_64, `handler.handler`, 메모리 1024MB, 제한 시간
 }
 ```
 
-4. 응답은 `id`, **한 번만 발급되는 `manage_token`**, `status:PENDING_UPLOAD`, `uploads[]`, `upload_expires_in:300`, `expires_at`입니다. 각 `uploads[i].fields`를 그대로 FormData에 넣고 마지막에 파일을 추가하여 `uploads[i].url`로 POST합니다. 파일 본문은 Lambda를 거치지 않습니다. 서명 정책은 객체 경로·크기 상한·암호화·SHA-256 체크섬을 고정합니다. [S3 POST 체크섬 문서](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/RESTObjectPOST.html)를 따릅니다.
+4. 응답은 `id`, **한 번만 발급되는 `manage_token`**, `status:PENDING_UPLOAD`, `uploads[]`, `upload_expires_in:120`, `expires_at`입니다. 각 `uploads[i].fields`를 그대로 FormData에 넣고 마지막에 파일을 추가하여 `uploads[i].url`로 POST합니다. 파일 본문은 Lambda를 거치지 않습니다. 서명 정책은 객체 경로·크기 상한·암호화·SHA-256 체크섬을 고정합니다. [S3 POST 체크섬 문서](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/RESTObjectPOST.html)를 따릅니다.
 5. `POST /api/transfers/{id}/complete`를 `X-Manage-Token` 헤더와 함께 호출합니다. 서버가 S3 존재·정확한 크기·실제 바이트 SHA-256을 확인한 뒤 조건부 갱신으로 `ACTIVE`로 바꿉니다. 해시 불일치는 객체를 삭제하고 `409 INTEGRITY_MISMATCH`를 반환합니다. 완료 호출 재시도는 활성 전송의 링크를 그대로 반환합니다.
 6. 완료 응답의 `share_url`은 `PUBLIC_BASE_URL/d.html?id=...`이며 QR도 이 주소를 담습니다. 수신 페이지는 공개 `GET /api/d/{id}`로 `files:[{name,size,url}]`, `encrypted`, `expires_at`을 받습니다. S3 GET 링크는 최대 300초이며 전송의 남은 수명을 넘지 않습니다. 다운로드 발급 횟수를 기록합니다.
 7. 상태 조회 `GET /api/transfers/{id}`와 폐기 `DELETE /api/transfers/{id}`도 같은 관리 토큰이 필요합니다. 폐기는 상태를 먼저 `REVOKED`로 바꾼 뒤 S3 객체를 삭제하여 완료 요청과의 경합을 막습니다. S3 삭제 실패 시 동일 폐기 요청을 재시도할 수 있습니다.
 
-한 전송에 최대 5개, 합계 20MiB를 지원합니다. 다중 파일은 `files[i]`마다 `scan_id` 또는 `sanitize_id`를 넣습니다. 최상위 참조는 단일 파일일 때만 허용합니다. 만료는 300/600/3600초 중 선택하며 생성 시점부터 계산합니다. 업로드 서명과 완료 요청의 유효 시간은 5분입니다. 지원 확장자는 `.txt .csv .json .md .log .xml .yaml .yml .pdf .png .jpg .jpeg .gif .webp`입니다. 검사·정제는 TXT/CSV만 지원합니다.
+한 전송에 최대 5개, 합계 20MiB를 지원합니다. 다중 파일은 `files[i]`마다 `scan_id` 또는 `sanitize_id`를 넣습니다. 최상위 참조는 단일 파일일 때만 허용합니다. 만료는 300/600/3600초 중 선택하며 생성 시점부터 계산합니다. 업로드 서명과 완료 요청의 유효 시간은 2분입니다. 지원 확장자는 `.txt .csv .json .md .log .xml .yaml .yml .pdf .png .jpg .jpeg .gif .webp`입니다. 검사·정제는 TXT/CSV만 지원합니다.
 
 `encrypted:true`는 선택 기능의 서버 계약입니다. 요청 `sha256`은 **암호문 해시**이며 S3 실제 바이트와 비교합니다. 평문 검사 세션의 해시와 암호문의 대응은 서버가 검증할 수 없습니다. AES-GCM 암호화·복호화와 키 프래그먼트는 프론트엔드가 구현해야 하며 키·IV를 API에 전달하지 않습니다.
 
@@ -55,7 +55,7 @@ Lambda는 Python 3.12 x86_64, `handler.handler`, 메모리 1024MB, 제한 시간
 | POST | `/api/admin/logout` | Bearer 세션 즉시 삭제 |
 | GET | `/api/admin/stats?days=1` | Bearer, 1~7일 이벤트·유형·출처 집계 |
 | GET | `/api/admin/events?limit=50&day=2026-10-19` | Bearer, 지정일 최근 이벤트, 1~100개 |
-| GET | `/api/admin/transfers?status=ACTIVE&limit=50` | Bearer, 전송 메타데이터, 파일명·내용·링크·토큰 제외 |
+| GET | `/api/admin/transfers?status=ACTIVE&limit=50` | Bearer, 전송 메타데이터(파일명 포함), 내용·링크·토큰 제외 |
 | DELETE | `/api/admin/transfers/{id}` | Bearer, 강제 폐기, source=admin 이벤트 |
 | POST | `/api/plugin/scan` | API Gateway API Key, JSON text 검사 |
 | POST | `/api/plugin/transfers` | API Gateway API Key, 승인 후 TXT/CSV 최대 4MiB 또는 JSON text 전송 |

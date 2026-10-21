@@ -729,6 +729,7 @@ def create_app(settings: Settings | None = None, storage=None, store=None):
                 {
                     "id": row["transfer_id"],
                     "display_id": row["transfer_id"][:8],
+                    "names": [f.get("name", "") for f in row.get("files", [])],
                     "size": sum(int(f["size"]) for f in row["files"]),
                     "created_at": row["created_at"],
                     "encrypted": row["encrypted"],

@@ -437,11 +437,8 @@ def test_admin_routes_privacy_stats_and_logout(env, admin):
     )
     result = client.get("/api/admin/transfers", headers=admin)
     assert result.status_code == 200
-    assert (
-        "sample.txt" not in result.text
-        and "s3_key" not in result.text
-        and "manage_hash" not in result.text
-    )
+    assert [row["names"] for row in result.json()["items"]] == [["sample.txt"]]
+    assert "s3_key" not in result.text and "manage_hash" not in result.text
     assert "share_url" not in result.text
     stats = client.get("/api/admin/stats?days=7", headers=admin).json()
     assert stats["by_event"]["TRANSFER"] == 1 and stats["by_source"]["extension"] == 1
