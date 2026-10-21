@@ -351,6 +351,7 @@ const mockApi = {
     const ref = sanitize_id || scan_id;
     const s = ref ? mockSession(ref) : null;
     if (CONFIG.SCANNABLE_EXTS.includes(extOf(f.name))) {
+      if (encrypted) throw new ApiError("VALIDATION_ERROR", "검사 대상 형식(.txt, .csv)은 종단간 암호화를 사용할 수 없습니다.", 422);
       if (!s) throw new ApiError("VALIDATION_ERROR", "검사 또는 정제 참조가 필요합니다.", 422);
     } else if (!acknowledge_unsupported) {
       throw new ApiError("VALIDATION_ERROR", "검사 미지원 형식에 대한 확인이 필요합니다.", 422);
@@ -359,8 +360,7 @@ const mockApi = {
     if (s && !s.clean && !acknowledge_risk) {
       throw new ApiError("SENSITIVE_REMAINS", "민감정보 정제 또는 위험 확인이 필요합니다.", 409);
     }
-    // 암호화 전송은 암호문 해시를 보내므로 검사 세션의 평문 해시와 비교하지 않는다(서버와 동일)
-    if (s && !encrypted && s.sha256 !== f.sha256) {
+    if (s && s.sha256 !== f.sha256) {
       throw new ApiError("INTEGRITY_MISMATCH", "검사·정제 결과 해시가 일치하지 않습니다.", 409);
     }
 

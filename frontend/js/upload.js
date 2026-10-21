@@ -57,6 +57,8 @@ function reset() {
   $("scan-card").hidden = true;
   $("send-card").hidden = true;
   $("send-error").hidden = true;
+  $("encrypt-check").disabled = false;
+  $("encrypt-note").hidden = true;
   setProgress(null);
   hideTransfer();
   guard.reset();
@@ -91,6 +93,13 @@ async function selectFile(file) {
   $("scan-card").hidden = false;
   $("send-card").hidden = false;
   setStep(2);
+
+  // 검사 대상 형식(.txt/.csv)은 서버가 평문 해시로 검사 결과를 검증하므로 종단간 암호화를 쓸 수 없다.
+  if (CONFIG.SCANNABLE_EXTS.includes(ext)) {
+    $("encrypt-check").checked = false;
+    $("encrypt-check").disabled = true;
+    $("encrypt-note").hidden = false;
+  }
 
   if (!CONFIG.SCANNABLE_EXTS.includes(ext)) {
     return markUnscannable("이 형식은 민감정보 검사를 지원하지 않습니다.");

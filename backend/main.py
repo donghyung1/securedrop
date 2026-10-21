@@ -453,6 +453,12 @@ def create_app(settings: Settings | None = None, storage=None, store=None):
                 get_session(reference, "SANITIZE" if sanitize_id else "SCAN") if reference else None
             )
             if extension in SCAN_EXTENSIONS:
+                if payload.encrypted:
+                    raise APIError(
+                        422,
+                        "VALIDATION_ERROR",
+                        "검사 대상 형식(.txt, .csv)은 종단간 암호화를 사용할 수 없습니다.",
+                    )
                 if session is None:
                     raise APIError(422, "VALIDATION_ERROR", "검사 또는 정제 참조가 필요합니다.")
             elif not payload.acknowledge_unsupported:
@@ -467,7 +473,7 @@ def create_app(settings: Settings | None = None, storage=None, store=None):
                     409, "SENSITIVE_REMAINS", "민감정보 정제 또는 위험 확인이 필요합니다."
                 )
             digest = item.sha256.lower()
-            if session and not payload.encrypted and digest != session["sha256"]:
+            if session and digest != session["sha256"]:
                 raise APIError(
                     409, "INTEGRITY_MISMATCH", "검사·정제 결과 해시가 일치하지 않습니다."
                 )

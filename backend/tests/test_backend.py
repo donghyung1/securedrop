@@ -588,24 +588,74 @@ def test_delete_failure_stays_revoked_and_supports_retry(env, monkeypatch):
     assert not s3.list_objects_v2(Bucket=app.state.settings.s3_bucket).get("Contents")
 
 
-def test_plaintext_hash_bypass_only_allowed_for_encrypted_transfers(env):
-    client, app, s3 = env
+def test_encrypted_transfer_rejected_for_scannable_extension(env):
+    client, _, _ = env
     scanned = scan_upload(client)
+    content = b"different-file-after-scan"
+    response = client.post(
+        "/api/transfers",
+        json={
+            "files": [
+                {
+                    "name": "a.txt",
+                    "size": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            ],
+            "scan_id": scanned["scan_id"],
+            "encrypted": True,
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_encrypted_transfer_allowed_for_non_scannable_extension(env):
+    client, app, s3 = env
     content = b"encrypted-demo-ciphertext"
-    payload = {
-        "files": [
-            {"name": "a.txt", "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
-        ],
-        "scan_id": scanned["scan_id"],
-        "encrypted": True,
-    }
-    issued = client.post("/api/transfers", json=payload).json()
+    response = client.post(
+        "/api/transfers",
+        json={
+            "files": [
+                {
+                    "name": "a.pdf",
+                    "size": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            ],
+            "acknowledge_unsupported": True,
+            "encrypted": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    issued = response.json()
     put(s3, app, issued, content)
     assert (
         client.post(f"/api/transfers/{issued['id']}/complete", headers=managed(issued)).status_code
         == 200
     )
     assert client.get(f"/api/d/{issued['id']}").json()["encrypted"] is True
+
+
+def test_plain_scannable_transfer_with_mismatched_hash_is_rejected(env):
+    client, _, _ = env
+    scanned = scan_upload(client)
+    content = b"different-file-after-scan"
+    response = client.post(
+        "/api/transfers",
+        json={
+            "files": [
+                {
+                    "name": "a.txt",
+                    "size": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            ],
+            "scan_id": scanned["scan_id"],
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INTEGRITY_MISMATCH"
 
 
 def test_scan_reference_does_not_bypass_sensitive_checks_with_different_extension(env):

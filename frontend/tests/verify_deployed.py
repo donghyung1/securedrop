@@ -122,9 +122,17 @@ def main():
         results["assist_mask_delete_cancel_clarify"] = "passed"
 
         # 4) 브라우저 암호화 (F12)
-        plain = (SAMPLES / "회의록.txt").read_bytes()
+        # 검사 대상(.txt/.csv)은 서버가 평문 해시로 검사 결과를 검증하므로 암호화 체크박스가 꺼지고 비활성화된다.
         page.locator("#file-input").set_input_files(str(SAMPLES / "회의록.txt"))
         expect(page.locator("#scan-status")).to_contain_text("발견되지 않았습니다", timeout=60000)
+        expect(page.locator("#encrypt-check")).to_be_disabled()
+        expect(page.locator("#encrypt-check")).not_to_be_checked()
+        plain = b"%PDF-1.4\n" + b"e2ee-sample\n" * 20  # 검사 미지원 형식은 암호화 가능
+        page.locator("#file-input").set_input_files(
+            {"name": "암호화시험.pdf", "mimeType": "application/pdf", "buffer": plain}
+        )
+        expect(page.locator("#encrypt-check")).to_be_enabled(timeout=60000)
+        page.locator("#confirm-check").check()
         page.locator("#encrypt-check").check()
         with page.expect_response(lambda r: r.url.endswith("/complete") and r.request.method == "POST",
                                   timeout=120000):
@@ -158,7 +166,6 @@ def main():
         # 5) 폐기된 링크 + 모바일 폭
         page.locator("#file-input").set_input_files(str(SAMPLES / "회의록.txt"))
         expect(page.locator("#scan-status")).to_contain_text("발견되지 않았습니다", timeout=60000)
-        page.locator("#encrypt-check").uncheck()
         with page.expect_response(lambda r: r.url.endswith("/complete"), timeout=120000) as completion:
             page.locator("#btn-send").click()
         share = completion.value.json()["share_url"]
