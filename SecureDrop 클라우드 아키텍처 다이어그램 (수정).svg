@@ -1,0 +1,259 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',sans-serif">
+<defs>
+<marker id="mb" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L12,5 L0,10 z" fill="#1a6ff0"/></marker>
+<marker id="mo" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L12,5 L0,10 z" fill="#ff6a1a"/></marker>
+<marker id="mg" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,4 L0,8 z" fill="#8a8f98"/></marker>
+<marker id="mbs" markerWidth="12" markerHeight="10" refX="1" refY="5" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M12,0 L0,5 L12,10 z" fill="#1a6ff0"/></marker>
+</defs>
+<style>
+text{fill:#1f2937}
+.h{font-size:17px;font-weight:700}
+.s{font-size:12.5px}
+.t{font-size:13px}
+.bd{font-size:13px;font-weight:700;fill:#fff;text-anchor:middle}
+.ic{font-size:22px;font-weight:700;fill:#fff;text-anchor:middle}
+</style>
+<rect width="1600" height="1200" fill="#ffffff"/>
+
+<!-- Title -->
+<text x="40" y="66" font-size="48" font-weight="800" fill="#111827" style="fill:#111827">SecureDrop Cloud</text>
+<text x="40" y="106" font-size="26" font-weight="700" style="fill:#4b5563">AWS 기반 안전한 파일 전송 서비스 아키텍처</text>
+
+<!-- Legend -->
+<line x1="1180" y1="52" x2="1250" y2="52" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<text x="1265" y="57" class="t" font-size="15">API 요청 / 응답 (제어 흐름)</text>
+<line x1="1180" y1="82" x2="1250" y2="82" stroke="#ff6a1a" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#mo)"/>
+<text x="1265" y="87" class="t" font-size="15">파일 전송 (데이터 흐름)</text>
+<line x1="1180" y1="112" x2="1250" y2="112" stroke="#8a8f98" stroke-width="1.5" marker-end="url(#mg)"/>
+<text x="1265" y="117" class="t" font-size="15">암호화 키 사용 (KMS)</text>
+
+<!-- User panel -->
+<rect x="30" y="140" width="200" height="590" rx="14" fill="#eef4fb" stroke="#b9cde6" stroke-width="1.5"/>
+<text x="130" y="172" text-anchor="middle" font-size="19" font-weight="700">사용자</text>
+<!-- laptop + phone -->
+<rect x="62" y="190" width="70" height="46" rx="5" fill="#dbeafe" stroke="#1e3a8a" stroke-width="3"/>
+<rect x="52" y="238" width="90" height="8" rx="3" fill="#1e3a8a"/>
+<rect x="150" y="186" width="30" height="58" rx="6" fill="#dbeafe" stroke="#1e3a8a" stroke-width="3"/>
+<text x="130" y="272" text-anchor="middle" class="t">PC / 모바일 브라우저</text>
+<!-- extension -->
+<rect x="44" y="290" width="172" height="48" rx="9" fill="#fff" stroke="#6b7280" stroke-width="1.5"/>
+<text x="130" y="310" text-anchor="middle" class="t" font-weight="700">Chrome 확장</text>
+<text x="130" y="328" text-anchor="middle" font-size="11.5">ChatGPT/Claude 입력 검사</text>
+<rect x="44" y="346" width="172" height="48" rx="9" fill="#fff" stroke="#6b7280" stroke-width="1.5"/>
+<text x="130" y="366" text-anchor="middle" class="t" font-weight="700">MCP 플러그인</text>
+<text x="130" y="384" text-anchor="middle" font-size="11.5">API Gateway 호출 (API 키)</text>
+<!-- E2EE note -->
+<rect x="44" y="425" width="172" height="62" rx="9" fill="#fff8db" stroke="#e0b52e" stroke-width="1.5"/>
+<text x="130" y="447" text-anchor="middle" font-size="12">E2EE(브라우저 AES-GCM)는</text>
+<text x="130" y="465" text-anchor="middle" font-size="12">.txt/.csv 외 형식만 적용</text>
+<text x="130" y="481" text-anchor="middle" font-size="11" style="fill:#7a6200">(.txt/.csv는 서버 유출 검사)</text>
+
+<!-- CloudFront -->
+<rect x="330" y="140" width="310" height="120" rx="14" fill="#f3ebff" stroke="#8c4fff" stroke-width="2"/>
+<rect x="346" y="168" width="60" height="60" rx="10" fill="#8c4fff"/>
+<circle cx="376" cy="198" r="16" fill="none" stroke="#fff" stroke-width="3"/><ellipse cx="376" cy="198" rx="7" ry="16" fill="none" stroke="#fff" stroke-width="2.5"/><line x1="360" y1="198" x2="392" y2="198" stroke="#fff" stroke-width="2.5"/>
+<text x="420" y="188" class="h">Amazon CloudFront</text>
+<text x="420" y="212" class="s">웹 자산 배포 (HTTPS,</text>
+<text x="420" y="230" class="s">보안 헤더)</text>
+
+<!-- S3 web -->
+<rect x="720" y="140" width="310" height="120" rx="14" fill="#eaf8e6" stroke="#3f8624" stroke-width="2"/>
+<rect x="736" y="168" width="60" height="60" rx="10" fill="#3f8624"/>
+<ellipse cx="766" cy="185" rx="16" ry="5" fill="none" stroke="#fff" stroke-width="3"/><path d="M750,185 L754,216 Q766,222 778,216 L782,185" fill="none" stroke="#fff" stroke-width="3"/>
+<text x="810" y="188" class="h">Amazon S3 (웹 자산)</text>
+<text x="810" y="212" class="s">OAC 비공개 오리진</text>
+<text x="810" y="230" class="s">CloudFront만 접근 가능</text>
+
+<!-- WAF -->
+<rect x="330" y="320" width="160" height="140" rx="14" fill="#ffeaea" stroke="#dd344c" stroke-width="2"/>
+<rect x="344" y="334" width="44" height="44" rx="8" fill="#dd344c"/>
+<path d="M366,340 L382,347 L382,360 Q382,370 366,374 Q350,370 350,360 L350,347 z" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="396" y="362" font-size="16" font-weight="700">AWS WAF</text>
+<text x="344" y="400" class="s">• IP 요청 수 제한</text>
+<text x="344" y="420" class="s">• AWS 관리형 규칙</text>
+<text x="344" y="440" font-size="11.5" style="fill:#6b7280">(API GW prod 스테이지)</text>
+
+<!-- API Gateway -->
+<rect x="540" y="320" width="220" height="140" rx="14" fill="#f3ebff" stroke="#8c4fff" stroke-width="2"/>
+<rect x="554" y="334" width="50" height="50" rx="9" fill="#8c4fff"/>
+<text x="579" y="367" class="ic">{ }</text>
+<text x="614" y="354" font-size="15" font-weight="700">Amazon</text>
+<text x="614" y="374" font-size="15" font-weight="700">API Gateway</text>
+<text x="554" y="408" class="s">REST API</text>
+<text x="554" y="427" class="s">• 경로별 스로틀링</text>
+<text x="554" y="446" class="s">• 플러그인 API 키</text>
+
+<!-- Lambda -->
+<rect x="850" y="290" width="380" height="210" rx="14" fill="#fff1e6" stroke="#ed7100" stroke-width="2"/>
+<rect x="866" y="306" width="60" height="60" rx="10" fill="#ed7100"/>
+<text x="896" y="350" style="font-size:40px;font-weight:700;fill:#fff;text-anchor:middle">λ</text>
+<text x="940" y="332" class="h">AWS Lambda</text>
+<text x="940" y="352" class="s">securedrop-api (단일 함수)</text>
+<text x="866" y="390" class="s">• .txt/.csv 유출 검사·정제 (4MiB 이하)</text>
+<text x="866" y="411" class="s">• 업로드용 Presigned POST 발급 (120초)</text>
+<text x="866" y="432" class="s">• 업로드 완료 검증 (크기·SHA-256)</text>
+<text x="866" y="453" class="s">• 다운로드 만료 확인·Presigned GET 발급</text>
+<text x="866" y="474" class="s">• 관리자 로그인·통계</text>
+
+<!-- DynamoDB -->
+<rect x="1350" y="290" width="220" height="210" rx="14" fill="#fdeafe" stroke="#c925d1" stroke-width="2"/>
+<rect x="1364" y="306" width="50" height="50" rx="9" fill="#c925d1"/>
+<ellipse cx="1389" cy="321" rx="14" ry="5" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M1375,321 V345 Q1389,353 1403,345 V321 M1375,333 Q1389,341 1403,333" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1424" y="327" font-size="15" font-weight="700">Amazon</text>
+<text x="1424" y="347" font-size="15" font-weight="700">DynamoDB</text>
+<text x="1364" y="388" font-size="12">• 전송 메타데이터·상태·만료</text>
+<text x="1364" y="406" font-size="11.5" style="fill:#6b7280">   (sd_transfers)</text>
+<text x="1364" y="426" font-size="12">• 검사 세션 (해시, TTL 10분)</text>
+<text x="1364" y="446" font-size="12">• 이벤트 로그 (sd_events)</text>
+<text x="1364" y="466" font-size="12">• 관리자·세션</text>
+
+<!-- S3 files -->
+<rect x="850" y="570" width="380" height="130" rx="14" fill="#eaf8e6" stroke="#3f8624" stroke-width="2"/>
+<rect x="866" y="586" width="60" height="60" rx="10" fill="#3f8624"/>
+<ellipse cx="896" cy="603" rx="16" ry="5" fill="none" stroke="#fff" stroke-width="3"/><path d="M880,603 L884,634 Q896,640 908,634 L912,603" fill="none" stroke="#fff" stroke-width="3"/>
+<text x="940" y="612" class="h">Amazon S3 (파일 저장소)</text>
+<text x="940" y="634" class="s">비공개 버킷</text>
+<text x="866" y="668" class="s">• SSE-KMS 암호화 · HTTPS 강제</text>
+<text x="866" y="688" class="s">• 1일 후 자동 삭제 (수명 주기)</text>
+
+<!-- KMS -->
+<rect x="1350" y="570" width="220" height="130" rx="14" fill="#ffeaea" stroke="#dd344c" stroke-width="2"/>
+<rect x="1364" y="586" width="50" height="50" rx="9" fill="#dd344c"/>
+<circle cx="1380" cy="611" r="7" fill="none" stroke="#fff" stroke-width="3"/><path d="M1387,611 H1404 M1398,611 V619 M1404,611 V617" fill="none" stroke="#fff" stroke-width="3"/>
+<text x="1424" y="617" class="h">AWS KMS</text>
+<text x="1364" y="660" class="s">• 고객 관리형 키</text>
+<text x="1364" y="680" class="s">• 자동 회전</text>
+
+<!-- Arrows: top -->
+<line x1="230" y1="200" x2="328" y2="200" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<text x="279" y="190" text-anchor="middle" class="t">HTTPS</text>
+<line x1="640" y1="200" x2="718" y2="200" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<line x1="640" y1="260" x2="640" y2="318" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<text x="652" y="296" font-size="12.5">/api/admin/* 만 (관리자)</text>
+
+<!-- User -> WAF -> APIGW -> Lambda -->
+<line x1="230" y1="380" x2="328" y2="380" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<text x="234" y="350" font-size="11.5">검사·전송 생성·</text>
+<text x="234" y="365" font-size="11.5">다운로드 요청</text>
+<circle cx="279" cy="402" r="11" fill="#1a6ff0"/><text x="279" y="407" class="bd">1</text>
+<line x1="490" y1="390" x2="538" y2="390" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<line x1="760" y1="395" x2="848" y2="395" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<text x="804" y="385" text-anchor="middle" font-size="12">요청 전달</text>
+
+<!-- Lambda <-> DynamoDB -->
+<line x1="1230" y1="400" x2="1348" y2="400" stroke="#1a6ff0" stroke-width="2.5" marker-start="url(#mbs)" marker-end="url(#mb)"/>
+<text x="1289" y="368" text-anchor="middle" font-size="12">메타데이터</text>
+<text x="1289" y="384" text-anchor="middle" font-size="12">저장/조회</text>
+
+<!-- Lambda <-> S3 files -->
+<line x1="1040" y1="500" x2="1040" y2="568" stroke="#ff6a1a" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#mo)"/>
+<text x="1054" y="540" font-size="12.5">Presigned POST/GET 발급</text>
+
+<!-- KMS -> S3 files -->
+<line x1="1350" y1="635" x2="1232" y2="635" stroke="#8a8f98" stroke-width="1.5" marker-end="url(#mg)"/>
+<text x="1291" y="625" text-anchor="middle" font-size="12">SSE-KMS</text>
+
+<!-- Flow 1 text -->
+<circle cx="262" cy="492" r="11" fill="#1a6ff0"/><text x="262" y="497" class="bd">1</text>
+<text x="282" y="489" class="t" font-weight="700">유출 검사 (.txt/.csv 4MiB 이하)</text>
+<text x="282" y="507" class="s">서버는 해시만 기록, 파일 저장 안 함</text>
+
+<!-- Flow 3: complete -->
+<path d="M230,580 H700 V462" fill="none" stroke="#1a6ff0" stroke-width="2.5" marker-end="url(#mb)"/>
+<circle cx="262" cy="556" r="11" fill="#1a6ff0"/><text x="262" y="561" class="bd">3</text>
+<text x="282" y="561" class="t" font-weight="700">/complete: 크기·SHA-256 확인 후 활성화</text>
+
+<!-- Flow 2: upload -->
+<line x1="230" y1="640" x2="848" y2="640" stroke="#ff6a1a" stroke-width="2.5" stroke-dasharray="9 6" marker-end="url(#mo)"/>
+<circle cx="262" cy="618" r="11" fill="#ff6a1a"/><text x="262" y="623" class="bd">2</text>
+<text x="282" y="623" class="t" font-weight="700">모든 파일 Presigned POST 직접 업로드</text>
+<text x="282" y="661" class="s">합계 20MiB, 최대 5개</text>
+
+<!-- Flow 4: download -->
+<line x1="850" y1="696" x2="232" y2="696" stroke="#ff6a1a" stroke-width="2.5" stroke-dasharray="9 6" marker-end="url(#mo)"/>
+<circle cx="262" cy="676" r="0" fill="none"/>
+<circle cx="262" cy="715" r="11" fill="#ff6a1a"/><text x="262" y="720" class="bd">4</text>
+<text x="282" y="720" class="t" font-weight="700">Presigned GET 다운로드 (최대 5분, 만료 시 차단)</text>
+
+<!-- Security band -->
+<rect x="30" y="760" width="1540" height="170" rx="14" fill="#eef4fb" stroke="#b9cde6" stroke-width="1.5"/>
+<text x="48" y="800" font-size="19" font-weight="700">보안 및</text>
+<text x="48" y="826" font-size="19" font-weight="700">모니터링 계층</text>
+<g>
+<rect x="250" y="778" width="430" height="134" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<rect x="266" y="800" width="58" height="58" rx="10" fill="#dd344c"/>
+<circle cx="295" cy="822" r="8" fill="none" stroke="#fff" stroke-width="3"/><path d="M279,849 Q295,830 311,849" fill="none" stroke="#fff" stroke-width="3"/>
+<text x="340" y="805" class="h">AWS IAM</text>
+<text x="340" y="831" class="s">• 최소 권한 (Lambda 실행 역할)</text>
+<text x="340" y="851" class="s">• S3 transfers/* 접두사 한정</text>
+<text x="340" y="871" class="s">• DynamoDB 테이블 단위 권한</text>
+</g>
+<g>
+<rect x="700" y="778" width="430" height="134" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<rect x="716" y="800" width="58" height="58" rx="10" fill="#e7157b"/>
+<path d="M727,840 Q725,822 741,822 Q745,806 761,812 Q771,818 767,832 Q774,838 767,842 Z" fill="none" stroke="#fff" stroke-width="3"/>
+<text x="790" y="805" class="h">AWS CloudTrail</text>
+<text x="790" y="831" class="s">• 관리 이벤트 + S3 데이터 이벤트 기록</text>
+<text x="790" y="851" class="s">• 로그 파일 검증 활성화</text>
+<text x="790" y="871" class="s">• 감사 및 추적</text>
+</g>
+<g>
+<rect x="1150" y="778" width="400" height="134" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<rect x="1166" y="800" width="58" height="58" rx="10" fill="#e7157b"/>
+<circle cx="1193" cy="827" r="11" fill="none" stroke="#fff" stroke-width="3"/><line x1="1201" y1="835" x2="1213" y2="847" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+<text x="1240" y="805" class="h">Amazon CloudWatch</text>
+<text x="1240" y="831" class="s">• Lambda·API 로그 14일 보관</text>
+<text x="1240" y="851" class="s">• 대시보드</text>
+<text x="1240" y="871" class="s">• 알람: Lambda 오류 · API 5XX</text>
+</g>
+
+<!-- Flow strip -->
+<rect x="30" y="950" width="1540" height="220" rx="14" fill="#eef4fb" stroke="#b9cde6" stroke-width="1.5"/>
+<text x="48" y="1042" font-size="19" font-weight="700">파일 전송 흐름</text>
+<text x="48" y="1068" font-size="19" font-weight="700">(요약)</text>
+<g>
+<rect x="250" y="970" width="230" height="180" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<circle cx="276" cy="998" r="13" fill="#1a6ff0"/><text x="276" y="1003" class="bd">1</text>
+<text x="298" y="1004" class="h" font-size="16" style="fill:#1a6ff0">파일 선택</text>
+<text x="266" y="1050" class="s">사용자가 전송할 파일을</text>
+<text x="266" y="1070" class="s">선택 (합계 20MiB, 최대 5개)</text>
+</g>
+<g>
+<rect x="500" y="970" width="230" height="180" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<circle cx="526" cy="998" r="13" fill="#1a6ff0"/><text x="526" y="1003" class="bd">2</text>
+<text x="548" y="1004" class="h" font-size="16" style="fill:#1a6ff0">유출 검사</text>
+<text x="516" y="1050" class="s">.txt/.csv(4MiB 이하)는</text>
+<text x="516" y="1070" class="s">Lambda가 검사, 필요 시 정제</text>
+<text x="516" y="1090" class="s">그 외 형식은 E2EE 암호화</text>
+</g>
+<g>
+<rect x="750" y="970" width="230" height="180" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<circle cx="776" cy="998" r="13" fill="#1a6ff0"/><text x="776" y="1003" class="bd">3</text>
+<text x="798" y="1004" class="h" font-size="16" style="fill:#1a6ff0">전송 생성</text>
+<text x="766" y="1050" class="s">Lambda가 전송 메타데이터를</text>
+<text x="766" y="1070" class="s">DynamoDB에 저장하고</text>
+<text x="766" y="1090" class="s">Presigned POST 발급</text>
+</g>
+<g>
+<rect x="1000" y="970" width="260" height="180" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<circle cx="1026" cy="998" r="13" fill="#1a6ff0"/><text x="1026" y="1003" class="bd">4</text>
+<text x="1048" y="1004" class="h" font-size="16" style="fill:#1a6ff0">S3 직접 업로드·완료 검증</text>
+<text x="1016" y="1050" class="s">브라우저가 S3에 직접 업로드</text>
+<text x="1016" y="1070" class="s">/complete에서 크기·SHA-256</text>
+<text x="1016" y="1090" class="s">확인 후 전송 활성화</text>
+</g>
+<g>
+<rect x="1280" y="970" width="270" height="180" rx="12" fill="#fff" stroke="#e5e7eb"/>
+<circle cx="1306" cy="998" r="13" fill="#1a6ff0"/><text x="1306" y="1003" class="bd">5</text>
+<text x="1328" y="1004" class="h" font-size="16" style="fill:#1a6ff0">공유 링크·다운로드</text>
+<text x="1296" y="1050" class="s">공유 링크로 접속해 다운로드</text>
+<text x="1296" y="1070" class="s">Presigned GET (최대 5분)</text>
+<text x="1296" y="1090" class="s">만료된 링크는 차단</text>
+</g>
+<g stroke="#1a6ff0" stroke-width="2.5" fill="none">
+<line x1="482" y1="1060" x2="498" y2="1060" marker-end="url(#mb)"/>
+<line x1="732" y1="1060" x2="748" y2="1060" marker-end="url(#mb)"/>
+<line x1="982" y1="1060" x2="998" y2="1060" marker-end="url(#mb)"/>
+<line x1="1262" y1="1060" x2="1278" y2="1060" marker-end="url(#mb)"/>
+</g>
+</svg>
