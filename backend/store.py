@@ -1,6 +1,6 @@
 """DynamoDB persistence. TTL is cleanup only; callers enforce expiry on reads."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import cached_property, wraps
 from uuid import uuid4
 
@@ -12,7 +12,7 @@ from errors import APIError
 
 
 def now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def aws_errors(fn):

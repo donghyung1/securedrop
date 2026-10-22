@@ -8,7 +8,7 @@ import argparse
 import base64
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import boto3
@@ -131,7 +131,7 @@ def main():
                 client.delete(f"/api/transfers/{ident}", headers=headers)
 
     # WAF: no blocked requests from our traffic (sampled requests are best-effort).
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     blocked = 0
     for name in (
         "RateLimitPerIp",
