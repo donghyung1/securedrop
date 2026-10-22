@@ -23,6 +23,7 @@ dev = [
     "zxing-cpp>=3.1.1",
     "pillow>=13.0.0",
     "playwright>=1.64.0",
+    "boto3[crt]>=1.43.117",
 ]
 
 [tool.pytest.ini_options]
