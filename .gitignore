@@ -20,3 +20,19 @@ SecureDrop_Cloud_PRD_*.txt
 *.har
 CLAUDE.md
 *.pdf
+# Claude Code local state (worktrees, settings).
+.claude/
+# IaC state and local deploy config.
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+cdk.out/
+samconfig.toml
+# Build artifacts, logs, OS files.
+node_modules/
+*.zip
+*.log
+.DS_Store
+Thumbs.db
+*.png
